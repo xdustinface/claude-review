@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'child_process';
+import { StringDecoder } from 'string_decoder';
 import { promisify } from 'util';
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -105,17 +106,20 @@ export class ClaudeClient {
       const killOnOutputExceeded = (): void => {
         if (outputExceeded) return;
         outputExceeded = true;
+        clearTimeout(timer);
         child.kill('SIGTERM');
         outputKillTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already dead */ } }, 5000);
       };
+      const stdoutDecoder = new StringDecoder('utf8');
+      const stderrDecoder = new StringDecoder('utf8');
       child.stdout.on('data', (data: Buffer) => {
         if (outputExceeded || settled) return;
-        stdout += data.toString();
+        stdout += stdoutDecoder.write(data);
         if (stdout.length + stderr.length > MAX_OUTPUT) killOnOutputExceeded();
       });
       child.stderr.on('data', (data: Buffer) => {
         if (outputExceeded || settled) return;
-        stderr += data.toString();
+        stderr += stderrDecoder.write(data);
         if (stdout.length + stderr.length > MAX_OUTPUT) killOnOutputExceeded();
       });
 
@@ -125,6 +129,8 @@ export class ClaudeClient {
         if (outputKillTimer) clearTimeout(outputKillTimer);
         if (settled) return;
         settled = true;
+        stdout += stdoutDecoder.end();
+        stderr += stderrDecoder.end();
         if (timedOut) {
           reject(new Error('Claude CLI timed out after 300s'));
           return;
@@ -186,6 +192,7 @@ export class ClaudeClient {
           reject(new Error(`stdin write failed: ${(err as Error).message}`));
         }
         try { child.kill('SIGTERM'); } catch { /* already dead */ }
+        setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already dead */ } }, 5000);
       }
     });
   }

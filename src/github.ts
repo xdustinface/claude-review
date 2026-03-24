@@ -184,12 +184,15 @@ export async function postReview(
   for (const f of result.findings) {
     if (!f.file || f.line <= 0) {
       const location = f.file ? ` — \`${f.file}\`` : '';
-      let entry = `**[${getSeverityLabel(f.severity)}] ${f.title}**${location}\n  ${f.description}`;
+      const safeTitle = sanitizeMarkdown(f.title);
+      const safeDesc = sanitizeMarkdown(f.description);
+      let entry = `**[${getSeverityLabel(f.severity)}] ${safeTitle}**${location}\n  ${safeDesc}`;
       if (f.suggestedFix) {
         const fix = f.suggestedFix.length > 200
           ? f.suggestedFix.slice(0, 200) + '...'
           : f.suggestedFix;
         if (fix.includes('`') || fix.includes('\n')) {
+          // Dynamic fence: use more backticks than the longest run in the fix content
           const maxBackticks = (fix.match(/`+/g) || []).reduce((max, s) => Math.max(max, s.length), 0);
           const fence = '`'.repeat(Math.max(3, maxBackticks + 1));
           entry += `\n  ${fence}\n  ${fix}\n  ${fence}`;
@@ -317,6 +320,10 @@ function getSeverityLabel(severity: FindingSeverity): string {
   if (severity === 'blocking') return 'Blocking';
   if (severity === 'suggestion') return 'Suggestion';
   return 'Question';
+}
+
+function sanitizeMarkdown(text: string): string {
+  return text.replace(/<!--[\s\S]*?-->/g, '').replace(/<\/?[a-z][^>]*>/gi, '');
 }
 
 function formatFindingComment(finding: Finding): string {
@@ -501,4 +508,4 @@ export async function reactToReviewComment(
   }
 }
 
-export { formatFindingComment, getSeverityLabel, mapVerdictToEvent, BOT_MARKER };
+export { formatFindingComment, getSeverityLabel, mapVerdictToEvent, sanitizeMarkdown, BOT_MARKER };
