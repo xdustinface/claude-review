@@ -2,8 +2,14 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 
 import { ClaudeClient } from './claude';
+import { writeSuppression, writeLearning, sanitizeMemoryField } from './memory';
 
 type Octokit = ReturnType<typeof github.getOctokit>;
+
+interface MemoryConfig {
+  enabled: boolean;
+  repo: string;
+}
 
 const BOT_MARKER = '<!-- claude-review -->';
 
@@ -13,6 +19,8 @@ const BOT_MARKER = '<!-- claude-review -->';
 export async function handleReviewCommentReply(
   octokit: Octokit,
   client: ClaudeClient,
+  memoryConfig?: MemoryConfig,
+  memoryToken?: string,
 ): Promise<void> {
   const payload = github.context.payload;
   const comment = payload.comment;
@@ -73,6 +81,34 @@ export async function handleReviewCommentReply(
     });
 
     core.info('Posted reply to review comment');
+
+    if (memoryConfig?.enabled && memoryToken) {
+      const replyBody = comment.body?.trim() ?? '';
+      const simpleAcks = ['ok', 'done', 'fixed', 'thanks', 'will do', 'got it'];
+      const isSubstantive = replyBody.length > 50 && !simpleAcks.includes(replyBody.toLowerCase());
+
+      const authorAssociation = comment.author_association;
+      const isTrusted = ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(authorAssociation ?? '');
+
+      if (isSubstantive && isTrusted) {
+        try {
+          const memoryOctokit = github.getOctokit(memoryToken);
+          const memoryRepo = memoryConfig.repo || `${owner}/review-memory`;
+          const sanitized = sanitizeMemoryField(replyBody.slice(0, 500));
+
+          await writeLearning(memoryOctokit, memoryRepo, repo, {
+            id: `learn-${Date.now()}`,
+            content: `User context on "${parentComment.path}": ${sanitized}`,
+            scope: 'repo',
+            source: `${owner}/${repo}#${prNumber}`,
+            created_at: new Date().toISOString().split('T')[0],
+          });
+          core.info('Stored user context as learning');
+        } catch (error) {
+          core.debug(`Failed to write learning: ${error}`);
+        }
+      }
+    }
   } catch (error) {
     core.warning(`Failed to handle review comment reply: ${error}`);
   }
@@ -84,6 +120,8 @@ export async function handleReviewCommentReply(
 export async function handlePRComment(
   octokit: Octokit,
   client: ClaudeClient,
+  memoryConfig?: MemoryConfig,
+  memoryToken?: string,
 ): Promise<void> {
   const payload = github.context.payload;
   const comment = payload.comment;
@@ -112,7 +150,7 @@ export async function handlePRComment(
       await handleExplain(octokit, client, owner, repo, prNumber, command.args);
       break;
     case 'dismiss':
-      await handleDismiss(octokit, owner, repo, prNumber, command.args);
+      await handleDismiss(octokit, owner, repo, prNumber, command.args, memoryConfig, memoryToken);
       break;
     case 'help':
       await handleHelp(octokit, owner, repo, prNumber);
@@ -175,13 +213,51 @@ async function handleDismiss(
   repo: string,
   prNumber: number,
   findingRef: string,
+  memoryConfig?: MemoryConfig,
+  memoryToken?: string,
 ): Promise<void> {
+  const sanitizedPattern = findingRef
+    .replace(/</g, '').replace(/>/g, '')
+    .slice(0, 200)
+    .trim();
+
+  if (findingRef && sanitizedPattern.length < 3) {
+    core.warning('Finding reference too short to create suppression');
+    return;
+  }
+
+  const authorAssociation = github.context.payload.comment?.author_association;
+  const isTrusted = ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(authorAssociation ?? '');
+
+  if (!isTrusted) {
+    core.info('Dismiss from non-collaborator — acknowledging but not persisting suppression');
+  }
+
   await octokit.rest.issues.createComment({
     owner,
     repo,
     issue_number: prNumber,
-    body: `${BOT_MARKER}\nDismissed${findingRef ? `: ${findingRef}` : ''}. This will be remembered for future reviews once the memory system is enabled.`,
+    body: `${BOT_MARKER}\nDismissed${sanitizedPattern ? `: ${sanitizedPattern}` : ''}. ${memoryConfig?.enabled && isTrusted ? 'Stored as suppression in review memory.' : 'Enable memory to persist this for future reviews.'}`,
   });
+
+  if (isTrusted && memoryConfig?.enabled && memoryToken && sanitizedPattern) {
+    try {
+      const memoryOctokit = github.getOctokit(memoryToken);
+      const memoryRepo = memoryConfig.repo || `${owner}/review-memory`;
+
+      await writeSuppression(memoryOctokit, memoryRepo, repo, {
+        id: `supp-${Date.now()}`,
+        pattern: sanitizedPattern,
+        reason: `Dismissed by user on PR #${prNumber}`,
+        created_by: github.context.actor,
+        created_at: new Date().toISOString().split('T')[0],
+        pr_ref: `${owner}/${repo}#${prNumber}`,
+      });
+      core.info(`Wrote suppression for "${findingRef}" to memory repo`);
+    } catch (error) {
+      core.warning(`Failed to write suppression: ${error}`);
+    }
+  }
 }
 
 async function handleHelp(

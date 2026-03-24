@@ -6,7 +6,7 @@ import { ClaudeClient } from './claude';
 import { loadConfig } from './config';
 import { parsePRDiff, filterFiles, isDiffTooLarge } from './diff';
 import { handleReviewCommentReply, handlePRComment } from './interaction';
-import { loadMemory, buildMemoryContext, applySuppressions, RepoMemory } from './memory';
+import { loadMemory, buildMemoryContext, applySuppressions, updatePattern, RepoMemory } from './memory';
 import { fetchRecapState, deduplicateFindings, buildRecapSummary, resolveAddressedThreads } from './recap';
 import { runReview, determineVerdict } from './review';
 import {
@@ -178,7 +178,7 @@ async function runFullReview(
       } catch (error) {
         core.warning(`Failed to dismiss previous reviews: ${error}`);
       }
-      await postReview(octokit, owner, repo, prNumber, commitSha, result);
+      await postReview(octokit, owner, repo, prNumber, commitSha, result, diff);
       await updateProgressComment(octokit, owner, repo, progressCommentId, result);
       return;
     }
@@ -196,7 +196,7 @@ async function runFullReview(
         reviewComplete: true,
       };
       await dismissPreviousReviews(octokit, owner, repo, prNumber);
-      await postReview(octokit, owner, repo, prNumber, commitSha, result);
+      await postReview(octokit, owner, repo, prNumber, commitSha, result, diff);
       await updateProgressComment(octokit, owner, repo, progressCommentId, result);
       return;
     }
@@ -205,10 +205,10 @@ async function runFullReview(
 
     let memory: RepoMemory | null = null;
     let memoryContext = '';
-    if (config.memory.enabled) {
+    if (config.memory?.enabled) {
       const memoryToken = core.getInput('memory_repo_token') || core.getInput('github_token', { required: true });
       const memoryOctokit = github.getOctokit(memoryToken);
-      const memoryRepo = config.memory.repo || `${owner}/review-memory`;
+      const memoryRepo = config.memory?.repo || `${owner}/review-memory`;
 
       try {
         memory = await loadMemory(memoryOctokit, memoryRepo, repo);
@@ -262,7 +262,7 @@ async function runFullReview(
     const recapSummary = buildRecapSummary(result.findings.length, duplicates.length, resolved, open);
     result.summary = `${result.summary}\n\n${recapSummary}`;
 
-    const reviewId = await postReview(octokit, owner, repo, prNumber, commitSha, result);
+    const reviewId = await postReview(octokit, owner, repo, prNumber, commitSha, result, diff);
 
     if (result.verdict === 'APPROVE' && result.findings.length > 0) {
       try {
@@ -270,6 +270,21 @@ async function runFullReview(
       } catch (error) {
         core.warning(`Failed to create nit issue: ${error}`);
       }
+    }
+
+    if (memory && config.memory?.enabled) {
+      const memoryToken = core.getInput('memory_repo_token') || core.getInput('github_token', { required: true });
+      const memoryOctokit = github.getOctokit(memoryToken);
+      const memoryRepo = config.memory?.repo || `${owner}/review-memory`;
+
+      for (const finding of result.findings) {
+        try {
+          await updatePattern(memoryOctokit, memoryRepo, repo, finding.title, repo);
+        } catch (error) {
+          core.debug(`Failed to update pattern for "${finding.title}": ${error}`);
+        }
+      }
+      core.info(`Updated ${result.findings.length} patterns in memory repo`);
     }
 
     await updateProgressComment(octokit, owner, repo, progressCommentId, result);
@@ -341,6 +356,7 @@ async function handleInteraction(): Promise<void> {
   const oauthToken = core.getInput('claude_code_oauth_token');
   const apiKey = core.getInput('anthropic_api_key');
   const modelOverride = core.getInput('model');
+  const configPath = core.getInput('config_path') || '.claude-review.yml';
 
   const octokit = await getOctokit();
   const claude = new ClaudeClient({
@@ -349,7 +365,22 @@ async function handleInteraction(): Promise<void> {
     model: modelOverride || 'claude-opus-4-6',
   });
 
-  await handlePRComment(octokit, claude);
+  const { owner, repo } = github.context.repo;
+  const prNumber = github.context.payload.issue?.number;
+
+  let baseRef = 'main';
+  if (prNumber) {
+    const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+    baseRef = pr.base.ref;
+  }
+
+  const configContent = await fetchConfigFile(octokit, owner, repo, baseRef, configPath);
+  const config = loadConfig(configContent ?? undefined);
+
+  const memoryConfig = config.memory?.enabled ? config.memory : undefined;
+  const memoryToken = config.memory?.enabled ? (core.getInput('memory_repo_token') || core.getInput('github_token', { required: true })) : undefined;
+
+  await handlePRComment(octokit, claude, memoryConfig, memoryToken);
 }
 
 async function handleReviewCommentInteraction(): Promise<void> {
@@ -390,7 +421,10 @@ async function handleReviewCommentInteraction(): Promise<void> {
     model: config.model,
   });
 
-  await handleReviewCommentReply(octokit, claude);
+  const memoryConfig = config.memory?.enabled ? config.memory : undefined;
+  const memoryToken = config.memory?.enabled ? (core.getInput('memory_repo_token') || core.getInput('github_token', { required: true })) : undefined;
+
+  await handleReviewCommentReply(octokit, claude, memoryConfig, memoryToken);
 }
 
 run();
