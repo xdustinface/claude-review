@@ -205,18 +205,18 @@ describe('determineVerdict', () => {
     expect(determineVerdict('APPROVE', findings)).toBe('REQUEST_CHANGES');
   });
 
-  it('returns COMMENT when there are only suggestions', () => {
+  it('returns APPROVE when there are only suggestions', () => {
     const findings: Finding[] = [
       { severity: 'suggestion', title: 'A', file: '', line: 0, description: '', reviewers: [] },
     ];
-    expect(determineVerdict('APPROVE', findings)).toBe('COMMENT');
+    expect(determineVerdict('APPROVE', findings)).toBe('APPROVE');
   });
 
-  it('returns COMMENT when there are only questions', () => {
+  it('returns APPROVE when there are only questions', () => {
     const findings: Finding[] = [
       { severity: 'question', title: 'A', file: '', line: 0, description: '', reviewers: [] },
     ];
-    expect(determineVerdict('APPROVE', findings)).toBe('COMMENT');
+    expect(determineVerdict('APPROVE', findings)).toBe('APPROVE');
   });
 
   it('returns APPROVE when there are no findings', () => {

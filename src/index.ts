@@ -214,6 +214,7 @@ async function runFullReview(
     core.setOutput('review_id', reviewId.toString());
     core.setOutput('verdict', result.verdict);
     core.setOutput('findings_count', result.findings.length.toString());
+    core.setOutput('findings_json', JSON.stringify(result.findings));
 
     core.info(`Review complete: ${result.verdict} with ${result.findings.length} findings`);
   } catch (error) {
