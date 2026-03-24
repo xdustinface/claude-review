@@ -15,6 +15,8 @@ Claude Review runs three specialized reviewer agents in parallel — **Security 
 
 ## Quick Start
 
+> For a complete step-by-step installation guide including permissions setup, see [SETUP.md](SETUP.md).
+
 ### 1. Set up authentication
 
 Choose one:
