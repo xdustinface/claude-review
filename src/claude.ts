@@ -105,6 +105,7 @@ export class ClaudeClient {
         if (stdout.length > MAX_OUTPUT && !outputExceeded) {
           outputExceeded = true;
           child.kill('SIGTERM');
+          killTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already dead */ } }, 5000);
         }
       });
       child.stderr.on('data', (data: Buffer) => {
@@ -112,6 +113,7 @@ export class ClaudeClient {
         if (stderr.length > MAX_OUTPUT && !outputExceeded) {
           outputExceeded = true;
           child.kill('SIGTERM');
+          killTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already dead */ } }, 5000);
         }
       });
 

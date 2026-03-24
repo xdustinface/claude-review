@@ -4,7 +4,7 @@ import { ClaudeClient } from './claude';
 import { ReviewConfig, ReviewerAgent, Finding, ReviewResult, ReviewVerdict, ParsedDiff, AgentVote, TeamRoster, ReviewLevel } from './types';
 import { extractJSON } from './json';
 
-export const AGENT_POOL: ReviewerAgent[] = [
+export const AGENT_POOL: readonly ReviewerAgent[] = Object.freeze([
   {
     name: 'Security & Safety',
     focus: 'Vulnerabilities, injection, auth, data leaks, memory safety, crypto correctness, key exposure, timing side-channels',
@@ -33,9 +33,9 @@ export const AGENT_POOL: ReviewerAgent[] = [
     name: 'Dependencies & Integration',
     focus: 'API contracts, breaking changes, dependency versions, compatibility, external service integration, error handling at boundaries',
   },
-];
+]);
 
-const CORE_AGENTS = [0, 1, 2];
+const CORE_AGENTS: readonly number[] = Object.freeze([0, 1, 2]);
 
 export function selectTeam(
   diff: ParsedDiff,
@@ -71,7 +71,8 @@ export function selectTeam(
     }
   }
 
-  // If we still need more agents to reach teamSize, score and pick from remaining pool
+  // Custom reviewers may push count above teamSize (intentional — they were explicitly configured).
+  // Only fill remaining slots if we haven't already reached teamSize.
   if (selected.length < teamSize) {
     const paths = diff.files.map(f => f.path.toLowerCase());
     const selectedNames = new Set(selected.map(s => s.name));

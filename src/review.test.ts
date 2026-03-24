@@ -8,6 +8,7 @@ import {
   mergeIndividualFindings,
   selectTeam,
   tallyVotes,
+  AGENT_POOL,
 } from './review';
 import { Finding, ReviewerAgent, ReviewConfig, ParsedDiff, AgentVote } from './types';
 
@@ -496,6 +497,32 @@ describe('selectTeam', () => {
     const config = makeConfig({ review_level: 'medium' });
     const roster = selectTeam(diff, config);
     expect(roster.agents.map(a => a.name)).toContain('Testing & Coverage');
+  });
+
+  it('does not add scored agents beyond teamSize when custom reviewers are present', () => {
+    const customs: ReviewerAgent[] = [
+      { name: 'Custom A', focus: 'custom a' },
+      { name: 'Custom B', focus: 'custom b' },
+    ];
+    const diff = makeDiff({ totalAdditions: 10, totalDeletions: 5 });
+    const config = makeConfig({ review_level: 'small' });
+    const roster = selectTeam(diff, config, customs);
+    // 3 core + 2 custom = 5, teamSize is 3 but custom reviewers are always included.
+    // The scoring loop should not add any more agents beyond the 5 already selected.
+    const nonCoreNonCustom = roster.agents.filter(
+      a => !['Security & Safety', 'Architecture & Design', 'Correctness & Logic', 'Custom A', 'Custom B'].includes(a.name),
+    );
+    expect(nonCoreNonCustom).toHaveLength(0);
+  });
+});
+
+describe('AGENT_POOL', () => {
+  it('has exactly 7 agents', () => {
+    expect(AGENT_POOL).toHaveLength(7);
+  });
+
+  it('is frozen and cannot be mutated', () => {
+    expect(Object.isFrozen(AGENT_POOL)).toBe(true);
   });
 });
 
