@@ -1,0 +1,43 @@
+# Claude Review configuration
+# Place this file as .claude-review.yml in your repository root
+
+# Claude model for reviews (default: claude-opus-4-6)
+# model: claude-opus-4-6
+
+# Automatically review PRs on open/update (default: true)
+# auto_review: true
+
+# Auto-approve when all blocking findings are resolved (default: true)
+# auto_approve: true
+
+# Review language (default: en)
+# review_language: en
+
+# File filtering
+# include_paths:
+#   - "**/*"
+# exclude_paths:
+#   - "*.lock"
+#   - "dist/**"
+#   - "*.generated.*"
+
+# Maximum diff lines before skipping review (default: 10000)
+# max_diff_lines: 10000
+
+# Reviewer agents (defaults shown below)
+# reviewers:
+#   - name: "Security & Correctness"
+#     focus: "bugs, vulnerabilities, memory safety, data integrity, input validation"
+#   - name: "Architecture & Quality"
+#     focus: "design patterns, simplicity, maintainability, code reuse, naming, idioms"
+#   - name: "Testing & Edge Cases"
+#     focus: "test coverage, error paths, boundary conditions, race conditions"
+
+# Additional instructions injected into all reviewer prompts
+# instructions: |
+#   This is a Rust project. Focus on ownership and error handling.
+
+# Review memory (requires memory_repo_token)
+# memory:
+#   enabled: false
+#   repo: ""  # defaults to {owner}/review-memory

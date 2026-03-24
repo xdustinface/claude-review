@@ -1,0 +1,41 @@
+name: 'Claude Review'
+description: 'Multi-agent Claude Code PR review — automated code review with specialist agents'
+author: 'xdustinface'
+
+inputs:
+  claude_code_oauth_token:
+    description: 'Claude Code OAuth token for Max subscription authentication'
+    required: false
+  anthropic_api_key:
+    description: 'Anthropic API key (alternative to OAuth token)'
+    required: false
+  github_token:
+    description: 'GitHub token for posting reviews and comments'
+    required: true
+  config_path:
+    description: 'Path to .claude-review.yml config file'
+    required: false
+    default: '.claude-review.yml'
+  memory_repo_token:
+    description: 'GitHub token with access to the review memory repository'
+    required: false
+  model:
+    description: 'Claude model to use for reviews'
+    required: false
+    default: 'claude-opus-4-6'
+
+outputs:
+  review_id:
+    description: 'The GitHub review ID that was posted'
+  verdict:
+    description: 'Review verdict: APPROVE, COMMENT, or REQUEST_CHANGES'
+  findings_count:
+    description: 'Total number of findings'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
+
+branding:
+  icon: 'eye'
+  color: 'orange'
