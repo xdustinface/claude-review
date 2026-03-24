@@ -13,6 +13,7 @@ Claude Review runs three specialized reviewer agents in parallel — **Security 
 - **Custom bot identity**: GitHub App support lets reviews appear under your own app name and avatar
 - **Dual auth**: Works with Claude Max subscription (OAuth) or Anthropic API key
 - **Mention trigger**: Comment `@claude review` on any PR to trigger a review on demand
+- **Concurrent-safe**: New pushes to a PR automatically cancel any in-progress review for that PR
 
 ## Quick Start
 
@@ -62,6 +63,9 @@ jobs:
        contains(github.event.comment.body, '@claude') &&
        contains(github.event.comment.body, 'review') &&
        github.event.issue.pull_request)
+    concurrency:
+      group: claude-review-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
