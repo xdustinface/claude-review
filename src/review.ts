@@ -295,6 +295,23 @@ export function determineVerdict(claimed: unknown, findings: Finding[]): ReviewV
   return 'APPROVE'; // Approve even with suggestions — nits don't block PRs
 }
 
+function titlesMatch(a: string, b: string): boolean {
+  const aLower = a.toLowerCase();
+  const bLower = b.toLowerCase();
+
+  // Exact match
+  if (aLower === bLower) return true;
+
+  // Both titles must be at least 10 chars for substring matching
+  if (aLower.length < 10 || bLower.length < 10) return false;
+
+  // The shorter title must be contained in the longer one
+  const shorter = aLower.length <= bLower.length ? aLower : bLower;
+  const longer = aLower.length > bLower.length ? aLower : bLower;
+
+  return longer.includes(shorter);
+}
+
 /**
  * Merge individual reviewer findings when the consolidation agent fails.
  * De-duplicates by title similarity + file + line proximity.
@@ -309,8 +326,7 @@ export function mergeIndividualFindings(
       const existing = allFindings.find(e =>
         e.file === f.file &&
         Math.abs(e.line - f.line) <= 3 &&
-        (e.title.toLowerCase().includes(f.title.toLowerCase()) ||
-         f.title.toLowerCase().includes(e.title.toLowerCase()))
+        titlesMatch(e.title, f.title)
       );
 
       if (existing) {

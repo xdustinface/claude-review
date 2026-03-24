@@ -356,6 +356,24 @@ describe('mergeIndividualFindings', () => {
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0].reviewers).toEqual(['A']);
   });
+
+  it('does not match short titles as substrings', () => {
+    const result = mergeIndividualFindings([
+      { reviewer: 'A', findings: [makeFinding({ title: 'Bug', file: 'a.ts', line: 10 })] },
+      { reviewer: 'B', findings: [makeFinding({ title: 'Bug in error handling logic', file: 'a.ts', line: 11 })] },
+    ]);
+    expect(result.findings).toHaveLength(2);
+  });
+
+  it('matches long titles that are substrings of each other', () => {
+    const result = mergeIndividualFindings([
+      { reviewer: 'A', findings: [makeFinding({ title: 'Null check missing in handler', file: 'a.ts', line: 10, reviewers: ['A'] })] },
+      { reviewer: 'B', findings: [makeFinding({ title: 'Null check missing in handler for edge case', file: 'a.ts', line: 11, reviewers: ['B'] })] },
+    ]);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].reviewers).toContain('A');
+    expect(result.findings[0].reviewers).toContain('B');
+  });
 });
 
 describe('parseFindings with extractJSON', () => {

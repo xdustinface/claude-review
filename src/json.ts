@@ -10,25 +10,48 @@ export function extractJSON(text: string): string {
     cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?\s*```\s*$/, '');
   }
 
-  // If the cleaned text already parses, return it directly
+  // Try parsing directly first
   try {
     JSON.parse(cleaned);
     return cleaned;
   } catch {
-    // Continue to pattern matching
+    // Not valid JSON as-is, try to extract
   }
 
-  // Try to find a JSON object or array in the text, preferring whichever appears first
-  const objectMatch = cleaned.match(/\{[\s\S]*\}/);
-  const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
+  // Find the first { or [ and its matching closing bracket
+  const objStart = cleaned.indexOf('{');
+  const arrStart = cleaned.indexOf('[');
 
-  if (objectMatch && arrayMatch) {
-    const objectIdx = cleaned.indexOf(objectMatch[0]);
-    const arrayIdx = cleaned.indexOf(arrayMatch[0]);
-    return arrayIdx <= objectIdx ? arrayMatch[0] : objectMatch[0];
+  let start: number;
+  let openChar: string;
+  let closeChar: string;
+
+  if (objStart === -1 && arrStart === -1) return cleaned;
+  if (objStart === -1) { start = arrStart; openChar = '['; closeChar = ']'; }
+  else if (arrStart === -1) { start = objStart; openChar = '{'; closeChar = '}'; }
+  else if (objStart < arrStart) { start = objStart; openChar = '{'; closeChar = '}'; }
+  else { start = arrStart; openChar = '['; closeChar = ']'; }
+
+  // Find matching close bracket by counting nesting
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\' && inString) { escaped = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+
+    if (ch === openChar) depth++;
+    if (ch === closeChar) depth--;
+
+    if (depth === 0) {
+      return cleaned.slice(start, i + 1);
+    }
   }
-  if (objectMatch) return objectMatch[0];
-  if (arrayMatch) return arrayMatch[0];
 
   return cleaned;
 }

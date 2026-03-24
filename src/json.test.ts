@@ -47,4 +47,34 @@ describe('extractJSON', () => {
     const input = '  ```json\n{"a": 1}\n```  ';
     expect(JSON.parse(extractJSON(input))).toEqual({ a: 1 });
   });
+
+  it('extracts first balanced JSON object when multiple objects exist', () => {
+    const input = '{"a":1} text {"b":2}';
+    const result = JSON.parse(extractJSON(input));
+    expect(result).toEqual({ a: 1 });
+  });
+
+  it('extracts first balanced JSON array when multiple arrays exist', () => {
+    const input = 'prefix [1, 2] middle [3, 4] suffix';
+    const result = JSON.parse(extractJSON(input));
+    expect(result).toEqual([1, 2]);
+  });
+
+  it('handles nested braces correctly', () => {
+    const input = 'Result: {"outer": {"inner": [1, 2]}} trailing text';
+    const result = JSON.parse(extractJSON(input));
+    expect(result).toEqual({ outer: { inner: [1, 2] } });
+  });
+
+  it('handles strings containing braces', () => {
+    const input = 'preamble {"key": "value with { and } inside"} done';
+    const result = JSON.parse(extractJSON(input));
+    expect(result).toEqual({ key: 'value with { and } inside' });
+  });
+
+  it('handles escaped quotes in strings', () => {
+    const input = 'preamble {"key": "value with \\"quotes\\""} done';
+    const result = JSON.parse(extractJSON(input));
+    expect(result).toEqual({ key: 'value with "quotes"' });
+  });
 });
