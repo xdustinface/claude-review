@@ -150,7 +150,7 @@ jobs:
     if: |
       github.event_name == 'pull_request' ||
       (github.event_name == 'issue_comment' &&
-       (contains(github.event.comment.body, '@manki') || contains(github.event.comment.body, '@claude')) &&
+       contains(github.event.comment.body, '@manki') &&
        contains(github.event.comment.body, 'review') &&
        github.event.issue.pull_request)
     runs-on: ubuntu-latest
