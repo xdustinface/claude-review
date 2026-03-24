@@ -95,6 +95,7 @@ export class ClaudeClient {
       let settled = false;
       let killTimer: NodeJS.Timeout | undefined;
       let outputKillTimer: NodeJS.Timeout | undefined;
+      let stdinKillTimer: NodeJS.Timeout | undefined;
 
       const timer = setTimeout(() => {
         timedOut = true;
@@ -127,6 +128,7 @@ export class ClaudeClient {
         clearTimeout(timer);
         if (killTimer) clearTimeout(killTimer);
         if (outputKillTimer) clearTimeout(outputKillTimer);
+        if (stdinKillTimer) clearTimeout(stdinKillTimer);
         if (settled) return;
         settled = true;
         stdout += stdoutDecoder.end();
@@ -156,6 +158,7 @@ export class ClaudeClient {
         clearTimeout(timer);
         if (killTimer) clearTimeout(killTimer);
         if (outputKillTimer) clearTimeout(outputKillTimer);
+        if (stdinKillTimer) clearTimeout(stdinKillTimer);
         if (settled) return;
         settled = true;
         reject(new Error(`Claude CLI spawn failed: ${error.message}`));
@@ -192,7 +195,7 @@ export class ClaudeClient {
           reject(new Error(`stdin write failed: ${(err as Error).message}`));
         }
         try { child.kill('SIGTERM'); } catch { /* already dead */ }
-        setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already dead */ } }, 5000);
+        stdinKillTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already dead */ } }, 5000);
       }
     });
   }

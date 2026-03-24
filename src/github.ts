@@ -216,11 +216,11 @@ export async function postReview(
           if (closest) {
             validComments.push({ path: f.file, line: closest, side: 'RIGHT', body: commentBody });
           } else {
-            invalidComments.push(`**[${getSeverityLabel(f.severity)}] ${f.title}** (\`${f.file}:${f.line}\`): ${f.description}`);
+            invalidComments.push(`**[${getSeverityLabel(f.severity)}] ${sanitizeMarkdown(f.title)}** (\`${f.file}:${f.line}\`): ${sanitizeMarkdown(f.description).slice(0, 200)}`);
           }
         }
       } else {
-        invalidComments.push(`**[${getSeverityLabel(f.severity)}] ${f.title}** (\`${f.file}:${f.line}\`): ${f.description}`);
+        invalidComments.push(`**[${getSeverityLabel(f.severity)}] ${sanitizeMarkdown(f.title)}** (\`${f.file}:${f.line}\`): ${sanitizeMarkdown(f.description).slice(0, 200)}`);
       }
     } else {
       validComments.push({ path: f.file, line: f.line, side: 'RIGHT', body: commentBody });
@@ -329,8 +329,10 @@ function sanitizeMarkdown(text: string): string {
 function formatFindingComment(finding: Finding): string {
   const severityEmoji = finding.severity === 'blocking' ? '🚫' : finding.severity === 'suggestion' ? '💡' : '❓';
   const severityLabel = getSeverityLabel(finding.severity);
+  const safeTitle = sanitizeMarkdown(finding.title);
+  const safeDescription = sanitizeMarkdown(finding.description);
 
-  let comment = `${severityEmoji} **${severityLabel}**: ${finding.title}\n\n${finding.description}`;
+  let comment = `${severityEmoji} **${severityLabel}**: ${safeTitle}\n\n${safeDescription}`;
 
   if (finding.suggestedFix) {
     comment += `\n\n<details>\n<summary>Suggested fix</summary>\n\n\`\`\`suggestion\n${finding.suggestedFix}\n\`\`\`\n</details>`;
