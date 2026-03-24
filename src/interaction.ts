@@ -159,6 +159,10 @@ export async function handlePRComment(
       await handleDismiss(octokit, owner, repo, prNumber, command.args, memoryConfig, memoryToken);
       await reactToIssueComment(octokit, owner, repo, commentId, '+1');
       break;
+    case 'remember':
+      await reactToIssueComment(octokit, owner, repo, commentId, 'eyes');
+      await handleRemember(octokit, owner, repo, prNumber, command.args, memoryConfig, memoryToken);
+      break;
     case 'help':
       await reactToIssueComment(octokit, owner, repo, commentId, '+1');
       await handleHelp(octokit, owner, repo, prNumber);
@@ -170,13 +174,13 @@ export async function handlePRComment(
 }
 
 interface ParsedCommand {
-  type: 'explain' | 'dismiss' | 'help' | 'generic';
+  type: 'explain' | 'dismiss' | 'help' | 'remember' | 'forget' | 'check' | 'generic';
   args: string;
 }
 
 function parseCommand(body: string): ParsedCommand {
   const lower = body.toLowerCase();
-  const match = lower.match(/@claude\s+(explain|dismiss|help)(?:\s+(.*))?/);
+  const match = lower.match(/@claude\s+(explain|dismiss|help|remember|forget|check)(?:\s+(.*))?/);
 
   if (match) {
     return {
@@ -279,8 +283,86 @@ async function handleHelp(
     owner,
     repo,
     issue_number: prNumber,
-    body: `${BOT_MARKER}\n**Claude Review Commands:**\n\n| Command | Description |\n|---------|-------------|\n| \`@claude review\` | Run a full multi-agent review |\n| \`@claude explain [topic]\` | Explain something about this PR |\n| \`@claude dismiss [finding]\` | Dismiss a review finding |\n| \`@claude help\` | Show this help message |\n\nYou can also reply to any review comment to start a conversation.`,
+    body: `${BOT_MARKER}\n**Claude Review Commands:**\n\n| Command | Description |\n|---------|-------------|\n| \`@claude review\` | Run a full multi-agent review |\n| \`@claude explain [topic]\` | Explain something about this PR |\n| \`@claude dismiss [finding]\` | Dismiss a review finding |\n| \`@claude remember <instruction>\` | Teach the reviewer something for future reviews |\n| \`@claude remember global: <instruction>\` | Teach globally (all repos) |\n| \`@claude help\` | Show this help message |\n\nYou can also reply to any review comment to start a conversation.`,
   });
+}
+
+async function handleRemember(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  instruction: string,
+  memoryConfig?: MemoryConfig,
+  memoryToken?: string,
+): Promise<void> {
+  const authorAssociation = github.context.payload.comment?.author_association;
+  const isTrusted = ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(authorAssociation ?? '');
+
+  if (!isTrusted) {
+    await octokit.rest.issues.createComment({
+      owner, repo,
+      issue_number: prNumber,
+      body: `${BOT_MARKER}\nOnly collaborators can teach the reviewer.`,
+    });
+    return;
+  }
+
+  if (!instruction || instruction.trim().length < 10) {
+    await octokit.rest.issues.createComment({
+      owner, repo,
+      issue_number: prNumber,
+      body: `${BOT_MARKER}\nPlease provide a more detailed instruction (at least 10 characters).\n\nExample: \`@claude remember always check for SQL injection in query builders\``,
+    });
+    return;
+  }
+
+  if (!memoryConfig?.enabled || !memoryToken) {
+    await octokit.rest.issues.createComment({
+      owner, repo,
+      issue_number: prNumber,
+      body: `${BOT_MARKER}\nMemory is not enabled for this repo. Add \`memory.enabled: true\` to \`.claude-review.yml\` to use this feature.`,
+    });
+    return;
+  }
+
+  let scope: 'repo' | 'global' = 'repo';
+  let content = instruction.trim();
+
+  if (content.toLowerCase().startsWith('global:')) {
+    scope = 'global';
+    content = content.slice(7).trim();
+  }
+
+  const sanitized = sanitizeMemoryField(content);
+
+  try {
+    const memoryOctokit = github.getOctokit(memoryToken);
+    const memoryRepo = memoryConfig.repo || `${owner}/review-memory`;
+
+    await writeLearning(memoryOctokit, memoryRepo, repo, {
+      id: `learn-${Date.now()}`,
+      content: sanitized,
+      scope,
+      source: `${owner}/${repo}#${prNumber}`,
+      created_at: new Date().toISOString().split('T')[0],
+    });
+
+    await octokit.rest.issues.createComment({
+      owner, repo,
+      issue_number: prNumber,
+      body: `${BOT_MARKER}\nRemembered (scope: ${scope}): "${sanitized}"`,
+    });
+
+    core.info(`Stored learning: "${sanitized}" (scope: ${scope})`);
+  } catch (error) {
+    core.warning(`Failed to store learning: ${error}`);
+    await octokit.rest.issues.createComment({
+      owner, repo,
+      issue_number: prNumber,
+      body: `${BOT_MARKER}\nFailed to store learning. Check that the memory repo token has write access.`,
+    });
+  }
 }
 
 async function handleGenericQuestion(
