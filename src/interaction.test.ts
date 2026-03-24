@@ -47,6 +47,26 @@ describe('parseCommand', () => {
     const result = parseCommand('Hey @claude explain this function please');
     expect(result).toEqual<ParsedCommand>({ type: 'explain', args: 'this function please' });
   });
+
+  it('parses @claude remember with instruction', () => {
+    const result = parseCommand('@claude remember always check for SQL injection in query builders');
+    expect(result).toEqual<ParsedCommand>({ type: 'remember', args: 'always check for sql injection in query builders' });
+  });
+
+  it('parses @claude remember without args', () => {
+    const result = parseCommand('@claude remember');
+    expect(result).toEqual<ParsedCommand>({ type: 'remember', args: '' });
+  });
+
+  it('parses @claude forget with args', () => {
+    const result = parseCommand('@claude forget something');
+    expect(result).toEqual<ParsedCommand>({ type: 'forget', args: 'something' });
+  });
+
+  it('parses @claude check with args', () => {
+    const result = parseCommand('@claude check memory');
+    expect(result).toEqual<ParsedCommand>({ type: 'check', args: 'memory' });
+  });
 });
 
 describe('buildReplyContext', () => {
