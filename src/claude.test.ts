@@ -16,4 +16,18 @@ describe('ClaudeClient', () => {
     const client = new ClaudeClient({ apiKey: 'sk-test-key', model: 'claude-opus-4-6' });
     expect(client).toBeDefined();
   });
+
+  it('accepts both oauthToken and apiKey', () => {
+    const client = new ClaudeClient({
+      oauthToken: 'test-token',
+      apiKey: 'sk-test-key',
+      model: 'claude-opus-4-6',
+    });
+    expect(client).toBeDefined();
+  });
+
+  // Spawn behavior (stdin drain handling, timeout, output limits) is tested via
+  // integration in the GitHub Action workflow rather than unit tests. Mocking
+  // child_process.spawn deeply enough to exercise those paths reliably would
+  // couple tests to implementation details without catching real regressions.
 });

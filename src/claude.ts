@@ -169,7 +169,9 @@ export class ClaudeClient {
           // The drain handler stays registered until fired or GC. The `settled` guard
           // ensures it won't call end() after the process has already exited.
           child.stdin.once('drain', () => {
-            if (!settled) child.stdin.end();
+            if (!settled) {
+              try { child.stdin.end(); } catch { /* stream already destroyed */ }
+            }
           });
         } else {
           child.stdin.end();
