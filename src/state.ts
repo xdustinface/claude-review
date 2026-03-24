@@ -123,16 +123,33 @@ async function checkAndAutoApprove(
     pull_number: prNumber,
   });
 
-  await octokit.rest.pulls.createReview({
-    owner,
-    repo,
-    pull_number: prNumber,
-    commit_id: pr.head.sha,
-    event: 'APPROVE',
-    body: `${BOT_MARKER}\nAll blocking issues have been resolved. Auto-approving.`,
-  });
+  const body = `${BOT_MARKER}\nAll blocking issues have been resolved. Auto-approving.`;
 
-  core.info('Auto-approved PR');
+  try {
+    await octokit.rest.pulls.createReview({
+      owner,
+      repo,
+      pull_number: prNumber,
+      commit_id: pr.head.sha,
+      event: 'APPROVE',
+      body,
+    });
+    core.info('Auto-approved PR');
+  } catch {
+    core.warning(
+      'Failed to auto-approve PR. Ensure "Allow GitHub Actions to create and approve pull requests" is enabled in repo settings. Falling back to COMMENT.',
+    );
+    await octokit.rest.pulls.createReview({
+      owner,
+      repo,
+      pull_number: prNumber,
+      commit_id: pr.head.sha,
+      event: 'COMMENT',
+      body,
+    });
+    core.info('Posted auto-approve as COMMENT (fallback)');
+  }
+
   return true;
 }
 

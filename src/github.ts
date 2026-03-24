@@ -144,7 +144,7 @@ export async function dismissPreviousReviews(
   });
 
   for (const review of reviews) {
-    if (review.body?.includes(BOT_MARKER) && review.state !== 'DISMISSED') {
+    if (review.body?.includes(BOT_MARKER) && review.state === 'CHANGES_REQUESTED') {
       try {
         await octokit.rest.pulls.dismissReview({
           owner,
@@ -185,18 +185,44 @@ export async function postReview(
 
   const body = `${BOT_MARKER}\n${result.summary}`;
 
-  const { data: review } = await octokit.rest.pulls.createReview({
-    owner,
-    repo,
-    pull_number: prNumber,
-    commit_id: commitSha,
-    event,
-    body,
-    comments,
-  });
+  core.info(`Posting review: ${event} with ${comments.length} inline comments`);
 
-  core.info(`Posted review #${review.id} with verdict ${result.verdict} and ${comments.length} inline comments`);
-  return review.id;
+  try {
+    const { data: review } = await octokit.rest.pulls.createReview({
+      owner,
+      repo,
+      pull_number: prNumber,
+      commit_id: commitSha,
+      event,
+      body,
+      comments,
+    });
+
+    core.info(`Posted review #${review.id} with verdict ${result.verdict}`);
+    return review.id;
+  } catch (error) {
+    if (event === 'COMMENT') {
+      throw error;
+    }
+
+    const hint = event === 'APPROVE'
+      ? 'Ensure "Allow GitHub Actions to create and approve pull requests" is enabled in repo settings.'
+      : 'The token may lack permission to request changes.';
+    core.warning(`Failed to post ${event} review. ${hint} Falling back to COMMENT.`);
+
+    const { data: review } = await octokit.rest.pulls.createReview({
+      owner,
+      repo,
+      pull_number: prNumber,
+      commit_id: commitSha,
+      event: 'COMMENT',
+      body,
+      comments,
+    });
+
+    core.info(`Posted fallback COMMENT review #${review.id} (original verdict: ${result.verdict})`);
+    return review.id;
+  }
 }
 
 function mapVerdictToEvent(verdict: ReviewVerdict): 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES' {
