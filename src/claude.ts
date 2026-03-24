@@ -164,14 +164,21 @@ export class ClaudeClient {
       try {
         const canWrite = child.stdin.write(fullPrompt);
         if (!canWrite) {
-          child.stdin.once('drain', () => child.stdin.end());
+          child.stdin.once('drain', () => {
+            if (!settled) child.stdin.end();
+          });
         } else {
           child.stdin.end();
         }
       } catch (err) {
         core.warning(`stdin write failed: ${(err as Error).message}`);
-        child.kill('SIGTERM');
-        child.stdin.end();
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          if (killTimer) clearTimeout(killTimer);
+          reject(new Error(`stdin write failed: ${(err as Error).message}`));
+        }
+        try { child.kill('SIGTERM'); } catch { /* already dead */ }
       }
     });
   }

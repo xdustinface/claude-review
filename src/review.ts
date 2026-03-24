@@ -84,7 +84,7 @@ export function selectTeam(
       if (focus.includes('test') && paths.some(p => p.includes('test'))) score += 3;
 
       if (focus.includes('performance') && (
-        paths.some(p => p.includes('index') || p.includes('main') || p.includes('server')) ||
+        paths.some(p => p.endsWith('/index.ts') || p.endsWith('/index.js') || p.endsWith('/main.ts') || p.endsWith('/main.rs') || p.includes('/server')) ||
         diff.totalAdditions > 200
       )) score += 2;
 
@@ -206,7 +206,20 @@ async function runDeliberation(
       Math.abs(d.line - f.line) <= 3 &&
       titlesMatch(d.title, f.title)
     );
-    if (!isDupe) {
+    if (isDupe) {
+      const existing = deduped.find(d =>
+        d.file === f.file && Math.abs(d.line - f.line) <= 3 && titlesMatch(d.title, f.title)
+      );
+      if (existing) {
+        const severityOrder: Record<string, number> = { blocking: 3, suggestion: 2, question: 1 };
+        if ((severityOrder[f.severity] || 0) > (severityOrder[existing.severity] || 0)) {
+          existing.severity = f.severity;
+        }
+        if (!existing.reviewers.includes(f.originalReviewer)) {
+          existing.reviewers = [...existing.reviewers, f.originalReviewer];
+        }
+      }
+    } else {
       deduped.push(f);
     }
   }
