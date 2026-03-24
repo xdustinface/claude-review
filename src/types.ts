@@ -41,7 +41,7 @@ export interface AgentVote {
 }
 
 export interface TeamRoster {
-  level: ReviewLevel;
+  level: 'small' | 'medium' | 'large';  // resolved, never 'auto'
   agents: ReviewerAgent[];
   lineCount: number;
 }

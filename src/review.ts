@@ -1,7 +1,7 @@
 import * as core from '@actions/core';
 
 import { ClaudeClient } from './claude';
-import { ReviewConfig, ReviewerAgent, Finding, ReviewResult, ReviewVerdict, ParsedDiff, AgentVote, TeamRoster, ReviewLevel } from './types';
+import { ReviewConfig, ReviewerAgent, Finding, ReviewResult, ReviewVerdict, ParsedDiff, AgentVote, TeamRoster } from './types';
 import { extractJSON } from './json';
 
 export const AGENT_POOL: readonly ReviewerAgent[] = Object.freeze([
@@ -44,12 +44,14 @@ export function selectTeam(
 ): TeamRoster {
   const lineCount = diff.totalAdditions + diff.totalDeletions;
 
-  let level: ReviewLevel = config.review_level;
-  if (level === 'auto') {
+  let level: 'small' | 'medium' | 'large';
+  if (config.review_level === 'auto') {
     const thresholds = config.review_thresholds || { small: 200, medium: 1000 };
     if (lineCount < thresholds.small) level = 'small';
     else if (lineCount < thresholds.medium) level = 'medium';
     else level = 'large';
+  } else {
+    level = config.review_level;
   }
 
   const teamSize = level === 'small' ? 3 : level === 'medium' ? 5 : 7;
@@ -201,23 +203,18 @@ async function runDeliberation(
   // Deduplicate findings before deliberation
   const deduped: Array<Finding & { originalReviewer: string }> = [];
   for (const f of rawFindings) {
-    const isDupe = deduped.some(d =>
+    const existing = deduped.find(d =>
       d.file === f.file &&
       Math.abs(d.line - f.line) <= 3 &&
       titlesMatch(d.title, f.title)
     );
-    if (isDupe) {
-      const existing = deduped.find(d =>
-        d.file === f.file && Math.abs(d.line - f.line) <= 3 && titlesMatch(d.title, f.title)
-      );
-      if (existing) {
-        const severityOrder: Record<string, number> = { blocking: 3, suggestion: 2, question: 1 };
-        if ((severityOrder[f.severity] || 0) > (severityOrder[existing.severity] || 0)) {
-          existing.severity = f.severity;
-        }
-        if (!existing.reviewers.includes(f.originalReviewer)) {
-          existing.reviewers = [...existing.reviewers, f.originalReviewer];
-        }
+    if (existing) {
+      const severityOrder: Record<string, number> = { blocking: 3, suggestion: 2, question: 1 };
+      if ((severityOrder[f.severity] || 0) > (severityOrder[existing.severity] || 0)) {
+        existing.severity = f.severity;
+      }
+      if (!existing.reviewers.includes(f.originalReviewer)) {
+        existing.reviewers = [...existing.reviewers, f.originalReviewer];
       }
     } else {
       deduped.push(f);

@@ -164,6 +164,8 @@ export class ClaudeClient {
       try {
         const canWrite = child.stdin.write(fullPrompt);
         if (!canWrite) {
+          // The drain handler stays registered until fired or GC. The `settled` guard
+          // ensures it won't call end() after the process has already exited.
           child.stdin.once('drain', () => {
             if (!settled) child.stdin.end();
           });
@@ -176,6 +178,7 @@ export class ClaudeClient {
           settled = true;
           clearTimeout(timer);
           if (killTimer) clearTimeout(killTimer);
+          if (outputKillTimer) clearTimeout(outputKillTimer);
           reject(new Error(`stdin write failed: ${(err as Error).message}`));
         }
         try { child.kill('SIGTERM'); } catch { /* already dead */ }
