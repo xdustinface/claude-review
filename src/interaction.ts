@@ -2,7 +2,7 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 
 import { ClaudeClient } from './claude';
-import { writeSuppression, writeLearning, sanitizeMemoryField } from './memory';
+import { writeSuppression, writeLearning, updatePatternDecision, sanitizeMemoryField } from './memory';
 import { reactToIssueComment, reactToReviewComment } from './github';
 import { checkAndAutoApprove, fetchBotReviewThreads } from './state';
 import { ReviewConfig } from './types';
@@ -540,6 +540,22 @@ async function handleTriage(
         });
       } catch (error) {
         core.debug(`Failed to store suppression for "${item.title}": ${error}`);
+      }
+    }
+
+    for (const item of accepted) {
+      try {
+        await updatePatternDecision(memoryOctokit, memoryRepo, repo, item.title, true);
+      } catch (error) {
+        core.debug(`Failed to update pattern for "${item.title}": ${error}`);
+      }
+    }
+
+    for (const item of rejected) {
+      try {
+        await updatePatternDecision(memoryOctokit, memoryRepo, repo, item.title, false);
+      } catch (error) {
+        core.debug(`Failed to update pattern for "${item.title}": ${error}`);
       }
     }
   }
