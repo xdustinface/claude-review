@@ -5,6 +5,7 @@ import {
   determineVerdict,
   buildReviewerSystemPrompt,
   buildReviewerUserMessage,
+  mergeIndividualFindings,
 } from './review';
 import { Finding, ReviewerAgent, ReviewConfig } from './types';
 
@@ -166,13 +167,10 @@ describe('parseConsolidatedReview', () => {
     expect(result.findings).toEqual([]);
   });
 
-  it('returns fallback with COMMENT verdict and reviewComplete false for invalid JSON', () => {
-    const result = parseConsolidatedReview('not json at all');
-    expect(result.verdict).toBe('COMMENT');
-    expect(result.summary).toContain('consolidation failed');
-    expect(result.findings).toEqual([]);
-    expect(result.highlights).toEqual([]);
-    expect(result.reviewComplete).toBe(false);
+  it('throws on invalid JSON so caller can fall back to merged findings', () => {
+    expect(() => parseConsolidatedReview('not json at all')).toThrow(
+      /Failed to parse consolidated review/,
+    );
   });
 
   it('sets reviewComplete true on successful parse', () => {
@@ -282,5 +280,107 @@ describe('buildReviewerUserMessage', () => {
   it('omits repo context when empty', () => {
     const message = buildReviewerUserMessage('diff content', '');
     expect(message).not.toContain('Repository Context');
+  });
+});
+
+describe('mergeIndividualFindings', () => {
+  const makeFinding = (overrides: Partial<Finding> = {}): Finding => ({
+    severity: 'suggestion',
+    title: 'Test finding',
+    file: 'src/a.ts',
+    line: 10,
+    description: 'A test finding.',
+    reviewers: ['Reviewer A'],
+    ...overrides,
+  });
+
+  it('collects findings from multiple reviewers', () => {
+    const result = mergeIndividualFindings([
+      { reviewer: 'Security', findings: [makeFinding({ title: 'Bug A', file: 'a.ts', line: 1 })] },
+      { reviewer: 'Style', findings: [makeFinding({ title: 'Style B', file: 'b.ts', line: 5 })] },
+    ]);
+    expect(result.findings).toHaveLength(2);
+    expect(result.summary).toContain('2 findings from 2 reviewers');
+  });
+
+  it('de-duplicates findings on same file and nearby lines with similar titles', () => {
+    const result = mergeIndividualFindings([
+      { reviewer: 'Security', findings: [makeFinding({ title: 'Null check missing', file: 'a.ts', line: 10, reviewers: ['Security'] })] },
+      { reviewer: 'Testing', findings: [makeFinding({ title: 'Null check missing', file: 'a.ts', line: 11, reviewers: ['Testing'] })] },
+    ]);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].reviewers).toContain('Security');
+    expect(result.findings[0].reviewers).toContain('Testing');
+  });
+
+  it('keeps findings on different files even with same title', () => {
+    const result = mergeIndividualFindings([
+      { reviewer: 'A', findings: [makeFinding({ title: 'Bug', file: 'a.ts', line: 10 })] },
+      { reviewer: 'B', findings: [makeFinding({ title: 'Bug', file: 'b.ts', line: 10 })] },
+    ]);
+    expect(result.findings).toHaveLength(2);
+  });
+
+  it('keeps findings on same file but distant lines', () => {
+    const result = mergeIndividualFindings([
+      { reviewer: 'A', findings: [makeFinding({ title: 'Bug', file: 'a.ts', line: 10 })] },
+      { reviewer: 'B', findings: [makeFinding({ title: 'Bug', file: 'a.ts', line: 100 })] },
+    ]);
+    expect(result.findings).toHaveLength(2);
+  });
+
+  it('returns REQUEST_CHANGES when any finding is blocking', () => {
+    const result = mergeIndividualFindings([
+      { reviewer: 'A', findings: [makeFinding({ severity: 'blocking' })] },
+    ]);
+    expect(result.verdict).toBe('REQUEST_CHANGES');
+  });
+
+  it('returns APPROVE when no blocking findings', () => {
+    const result = mergeIndividualFindings([
+      { reviewer: 'A', findings: [makeFinding({ severity: 'suggestion' })] },
+    ]);
+    expect(result.verdict).toBe('APPROVE');
+  });
+
+  it('sets reviewComplete to true', () => {
+    const result = mergeIndividualFindings([]);
+    expect(result.reviewComplete).toBe(true);
+  });
+
+  it('does not add duplicate reviewer names', () => {
+    const result = mergeIndividualFindings([
+      { reviewer: 'A', findings: [makeFinding({ title: 'Bug', file: 'a.ts', line: 10, reviewers: ['A'] })] },
+      { reviewer: 'A', findings: [makeFinding({ title: 'Bug', file: 'a.ts', line: 10, reviewers: ['A'] })] },
+    ]);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].reviewers).toEqual(['A']);
+  });
+
+  it('does not match short titles as substrings', () => {
+    const result = mergeIndividualFindings([
+      { reviewer: 'A', findings: [makeFinding({ title: 'Bug', file: 'a.ts', line: 10 })] },
+      { reviewer: 'B', findings: [makeFinding({ title: 'Bug in error handling logic', file: 'a.ts', line: 11 })] },
+    ]);
+    expect(result.findings).toHaveLength(2);
+  });
+
+  it('matches long titles that are substrings of each other', () => {
+    const result = mergeIndividualFindings([
+      { reviewer: 'A', findings: [makeFinding({ title: 'Null check missing in handler', file: 'a.ts', line: 10, reviewers: ['A'] })] },
+      { reviewer: 'B', findings: [makeFinding({ title: 'Null check missing in handler for edge case', file: 'a.ts', line: 11, reviewers: ['B'] })] },
+    ]);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].reviewers).toContain('A');
+    expect(result.findings[0].reviewers).toContain('B');
+  });
+});
+
+describe('parseFindings with extractJSON', () => {
+  it('extracts JSON array from text with preamble', () => {
+    const input = 'Here are my findings:\n\n[{"severity":"blocking","title":"Bug","file":"a.ts","line":1,"description":"Crash"}]';
+    const findings = parseFindings(input, 'Test');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].title).toBe('Bug');
   });
 });

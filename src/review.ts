@@ -2,6 +2,7 @@ import * as core from '@actions/core';
 
 import { ClaudeClient } from './claude';
 import { ReviewConfig, ReviewerAgent, Finding, ReviewResult, ReviewVerdict, ParsedDiff } from './types';
+import { extractJSON } from './json';
 
 export async function runReview(
   client: ClaudeClient,
@@ -59,7 +60,14 @@ export async function runReview(
 
   const totalFindings = allFindings.reduce((sum, af) => sum + af.findings.length, 0);
   core.info(`Running consolidation agent with ${totalFindings} total findings...`);
-  const result = await runConsolidationAgent(client, config, allFindings, rawDiff);
+
+  let result: ReviewResult;
+  try {
+    result = await runConsolidationAgent(client, config, allFindings, rawDiff);
+  } catch (error) {
+    core.warning(`Consolidation failed: ${error}. Merging individual findings directly.`);
+    result = mergeIndividualFindings(allFindings);
+  }
 
   core.startGroup('Review Summary');
   core.info(`Verdict: ${result.verdict}`);
@@ -157,10 +165,7 @@ export function buildReviewerUserMessage(rawDiff: string, repoContext: string): 
 }
 
 export function parseFindings(responseText: string, reviewerName: string): Finding[] {
-  let jsonText = responseText.trim();
-  if (jsonText.startsWith('```')) {
-    jsonText = jsonText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
-  }
+  const jsonText = extractJSON(responseText);
 
   try {
     const parsed = JSON.parse(jsonText);
@@ -255,10 +260,7 @@ ${rawDiff}
 }
 
 export function parseConsolidatedReview(responseText: string): ReviewResult {
-  let jsonText = responseText.trim();
-  if (jsonText.startsWith('```')) {
-    jsonText = jsonText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
-  }
+  const jsonText = extractJSON(responseText);
 
   try {
     const parsed = JSON.parse(jsonText);
@@ -283,14 +285,7 @@ export function parseConsolidatedReview(responseText: string): ReviewResult {
       reviewComplete: true,
     };
   } catch (e) {
-    core.warning(`Failed to parse consolidated review: ${e}`);
-    return {
-      verdict: 'COMMENT',
-      summary: 'Review consolidation failed — raw findings from individual reviewers may be incomplete.',
-      findings: [],
-      highlights: [],
-      reviewComplete: false,
-    };
+    throw new Error(`Failed to parse consolidated review: ${e}`);
   }
 }
 
@@ -298,4 +293,59 @@ export function determineVerdict(claimed: unknown, findings: Finding[]): ReviewV
   const hasBlocking = findings.some(f => f.severity === 'blocking');
   if (hasBlocking) return 'REQUEST_CHANGES';
   return 'APPROVE'; // Approve even with suggestions — nits don't block PRs
+}
+
+function titlesMatch(a: string, b: string): boolean {
+  const aLower = a.toLowerCase();
+  const bLower = b.toLowerCase();
+
+  // Exact match
+  if (aLower === bLower) return true;
+
+  // Both titles must be at least 10 chars for substring matching
+  if (aLower.length < 10 || bLower.length < 10) return false;
+
+  // The shorter title must be contained in the longer one
+  const shorter = aLower.length <= bLower.length ? aLower : bLower;
+  const longer = aLower.length > bLower.length ? aLower : bLower;
+
+  return longer.includes(shorter);
+}
+
+/**
+ * Merge individual reviewer findings when the consolidation agent fails.
+ * De-duplicates by title similarity + file + line proximity.
+ */
+export function mergeIndividualFindings(
+  agentFindings: { reviewer: string; findings: Finding[] }[],
+): ReviewResult {
+  const allFindings: Finding[] = [];
+
+  for (const af of agentFindings) {
+    for (const f of af.findings) {
+      const existing = allFindings.find(e =>
+        e.file === f.file &&
+        Math.abs(e.line - f.line) <= 3 &&
+        titlesMatch(e.title, f.title)
+      );
+
+      if (existing) {
+        if (!existing.reviewers.includes(af.reviewer)) {
+          existing.reviewers = [...existing.reviewers, af.reviewer];
+        }
+      } else {
+        allFindings.push({ ...f, reviewers: [af.reviewer] });
+      }
+    }
+  }
+
+  const hasBlocking = allFindings.some(f => f.severity === 'blocking');
+
+  return {
+    verdict: hasBlocking ? 'REQUEST_CHANGES' : 'APPROVE',
+    summary: `Review completed (consolidation skipped). ${allFindings.length} findings from ${agentFindings.length} reviewers.`,
+    findings: allFindings,
+    highlights: [],
+    reviewComplete: true,
+  };
 }
