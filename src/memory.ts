@@ -152,6 +152,10 @@ export function matchesSuppression(finding: Finding, suppression: Suppression): 
   const titleLower = finding.title.toLowerCase();
   const patternLower = suppression.pattern.toLowerCase();
 
+  if (!patternLower || patternLower.length < 3) {
+    return false;
+  }
+
   if (!titleLower.includes(patternLower)) {
     return false;
   }
@@ -176,8 +180,8 @@ export function sanitizeMemoryField(value: string): string {
   let sanitized = value.length > MAX_MEMORY_FIELD_LENGTH
     ? value.slice(0, MAX_MEMORY_FIELD_LENGTH) + '...'
     : value;
-  // Escape data boundary tags to prevent injection
-  sanitized = sanitized.replace(/<\/?review-memory>/gi, '');
+  // Escape angle brackets to prevent XML-style boundary injection
+  sanitized = sanitized.replace(/</g, '\uFF1C').replace(/>/g, '\uFF1E');
   return sanitized;
 }
 
