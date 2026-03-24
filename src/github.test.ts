@@ -1,5 +1,5 @@
-import { formatFindingComment, mapVerdictToEvent, BOT_MARKER, buildNitIssueBody } from './github';
-import { Finding } from './types';
+import { formatFindingComment, mapVerdictToEvent, BOT_MARKER, buildNitIssueBody, getSeverityLabel, postReview } from './github';
+import { Finding, ReviewResult } from './types';
 
 describe('formatFindingComment', () => {
   const baseFinding: Finding = {
@@ -244,5 +244,107 @@ describe('buildNitIssueBody', () => {
   it('includes validation reminder in fix prompt', () => {
     const body = buildNitIssueBody(42, [suggestion], 'myorg');
     expect(body).toContain('Before applying this fix, validate the finding');
+  });
+});
+
+describe('postReview generalFindings', () => {
+  const mockCreateReview = jest.fn().mockResolvedValue({ data: { id: 1 } });
+  const mockOctokit = {
+    rest: {
+      pulls: {
+        createReview: mockCreateReview,
+      },
+    },
+  } as unknown as Parameters<typeof postReview>[0];
+
+  beforeEach(() => {
+    mockCreateReview.mockClear();
+  });
+
+  it('includes suggestedFix in general findings when finding has no file', async () => {
+    const result: ReviewResult = {
+      verdict: 'APPROVE',
+      summary: 'Summary',
+      findings: [
+        {
+          severity: 'suggestion',
+          title: 'Add error handling',
+          file: '',
+          line: 0,
+          description: 'Missing try/catch.',
+          suggestedFix: 'try { op(); } catch (e) { handle(e); }',
+          reviewers: ['Correctness'],
+        },
+      ],
+      highlights: [],
+      reviewComplete: true,
+    };
+
+    await postReview(mockOctokit, 'owner', 'repo', 1, 'sha', result);
+    const body = mockCreateReview.mock.calls[0][0].body as string;
+    expect(body).toContain('Fix: `try { op(); } catch (e) { handle(e); }`');
+  });
+
+  it('omits Fix line when finding has no suggestedFix', async () => {
+    const result: ReviewResult = {
+      verdict: 'APPROVE',
+      summary: 'Summary',
+      findings: [
+        {
+          severity: 'suggestion',
+          title: 'Add error handling',
+          file: '',
+          line: 0,
+          description: 'Missing try/catch.',
+          reviewers: ['Correctness'],
+        },
+      ],
+      highlights: [],
+      reviewComplete: true,
+    };
+
+    await postReview(mockOctokit, 'owner', 'repo', 1, 'sha', result);
+    const body = mockCreateReview.mock.calls[0][0].body as string;
+    expect(body).not.toContain('Fix:');
+  });
+
+  it('truncates long suggestedFix to 100 chars in general findings', async () => {
+    const longFix = 'x'.repeat(150);
+    const result: ReviewResult = {
+      verdict: 'APPROVE',
+      summary: 'Summary',
+      findings: [
+        {
+          severity: 'suggestion',
+          title: 'Long fix',
+          file: '',
+          line: 0,
+          description: 'Desc.',
+          suggestedFix: longFix,
+          reviewers: [],
+        },
+      ],
+      highlights: [],
+      reviewComplete: true,
+    };
+
+    await postReview(mockOctokit, 'owner', 'repo', 1, 'sha', result);
+    const body = mockCreateReview.mock.calls[0][0].body as string;
+    expect(body).toContain('Fix: `' + 'x'.repeat(100) + '`');
+    expect(body).not.toContain('x'.repeat(150));
+  });
+});
+
+describe('getSeverityLabel', () => {
+  it('returns Blocking for blocking severity', () => {
+    expect(getSeverityLabel('blocking')).toBe('Blocking');
+  });
+
+  it('returns Suggestion for suggestion severity', () => {
+    expect(getSeverityLabel('suggestion')).toBe('Suggestion');
+  });
+
+  it('returns Question for question severity', () => {
+    expect(getSeverityLabel('question')).toBe('Question');
   });
 });

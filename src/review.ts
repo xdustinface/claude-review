@@ -99,7 +99,8 @@ export function selectTeam(
         p.includes('package.json') || p.includes('cargo.toml') || p.includes('requirements')
       )) score += 3;
 
-      if (!AGENT_POOL.includes(agent)) score += 1;
+      const isCustom = !AGENT_POOL.some(p => p.name === agent.name);
+      if (isCustom) score += 1;
 
       return { agent, score };
     });

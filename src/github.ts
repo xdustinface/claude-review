@@ -1,7 +1,7 @@
 import * as core from '@actions/core';
 import * as github from '@actions/github';
 
-import { Finding, ParsedDiff, ReviewResult, ReviewVerdict } from './types';
+import { Finding, FindingSeverity, ParsedDiff, ReviewResult, ReviewVerdict } from './types';
 import { isLineInDiff, findClosestDiffLine } from './diff';
 
 type Octokit = ReturnType<typeof github.getOctokit>;
@@ -183,7 +183,8 @@ export async function postReview(
 
   for (const f of result.findings) {
     if (!f.file || f.line <= 0) {
-      generalFindings.push(`**[${getSeverityLabel(f.severity)}] ${f.title}**: ${f.description}`);
+      const fix = f.suggestedFix ? `\n  Fix: \`${f.suggestedFix.slice(0, 100)}\`` : '';
+      generalFindings.push(`**[${getSeverityLabel(f.severity)}] ${f.title}**${fix}`);
       continue;
     }
 
@@ -299,7 +300,7 @@ function mapVerdictToEvent(verdict: ReviewVerdict): 'APPROVE' | 'COMMENT' | 'REQ
   }
 }
 
-function getSeverityLabel(severity: string): string {
+function getSeverityLabel(severity: FindingSeverity): string {
   if (severity === 'blocking') return 'Blocking';
   if (severity === 'suggestion') return 'Suggestion';
   return 'Question';
