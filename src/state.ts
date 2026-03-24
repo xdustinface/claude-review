@@ -1,6 +1,8 @@
 import * as core from '@actions/core';
 import * as github from '@actions/github';
 
+import { dismissPreviousReviews } from './github';
+
 type Octokit = ReturnType<typeof github.getOctokit>;
 
 const BOT_MARKER = '<!-- claude-review -->';
@@ -122,6 +124,12 @@ async function checkAndAutoApprove(
     repo,
     pull_number: prNumber,
   });
+
+  try {
+    await dismissPreviousReviews(octokit, owner, repo, prNumber);
+  } catch (error) {
+    core.warning(`Failed to dismiss previous reviews during auto-approve: ${error}`);
+  }
 
   const body = `${BOT_MARKER}\nAll blocking issues have been resolved. Auto-approving.`;
 
