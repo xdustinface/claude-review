@@ -183,14 +183,16 @@ export async function postReview(
 
   for (const f of result.findings) {
     if (!f.file || f.line <= 0) {
-      let entry = `**[${getSeverityLabel(f.severity)}] ${f.title}**\n  ${f.description}`;
+      const location = f.file ? ` — \`${f.file}\`` : '';
+      let entry = `**[${getSeverityLabel(f.severity)}] ${f.title}**${location}\n  ${f.description}`;
       if (f.suggestedFix) {
         const fix = f.suggestedFix.length > 200
           ? f.suggestedFix.slice(0, 200) + '...'
           : f.suggestedFix;
         if (fix.includes('`') || fix.includes('\n')) {
-          const escaped = fix.replace(/`{3,}/g, '`` `');
-          entry += `\n  \`\`\`\n  ${escaped}\n  \`\`\``;
+          const maxBackticks = (fix.match(/`+/g) || []).reduce((max, s) => Math.max(max, s.length), 0);
+          const fence = '`'.repeat(Math.max(3, maxBackticks + 1));
+          entry += `\n  ${fence}\n  ${fix}\n  ${fence}`;
         } else {
           entry += `\n  Fix: \`${fix}\``;
         }

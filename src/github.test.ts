@@ -363,7 +363,7 @@ describe('postReview generalFindings', () => {
     expect(body).not.toContain('Fix: `');
   });
 
-  it('escapes triple backticks in suggestedFix to prevent broken code fences', async () => {
+  it('uses longer fence when suggestedFix contains triple backticks', async () => {
     const result: ReviewResult = {
       verdict: 'APPROVE',
       summary: 'Summary',
@@ -384,8 +384,8 @@ describe('postReview generalFindings', () => {
 
     await postReview(mockOctokit, 'owner', 'repo', 1, 'sha', result);
     const body = mockCreateReview.mock.calls[0][0].body as string;
-    expect(body).not.toContain('some ```code');
-    expect(body).toContain('some `` `code`` ` here');
+    expect(body).toContain('````');
+    expect(body).toContain('some ```code``` here');
   });
 
   it('includes description in general findings', async () => {
@@ -409,6 +409,29 @@ describe('postReview generalFindings', () => {
     await postReview(mockOctokit, 'owner', 'repo', 1, 'sha', result);
     const body = mockCreateReview.mock.calls[0][0].body as string;
     expect(body).toContain('Important description here.');
+  });
+
+  it('includes file path in general findings when file is set but line is invalid', async () => {
+    const result: ReviewResult = {
+      verdict: 'APPROVE',
+      summary: 'Summary',
+      findings: [
+        {
+          severity: 'suggestion',
+          title: 'Some title',
+          file: 'src/utils.ts',
+          line: 0,
+          description: 'Desc.',
+          reviewers: [],
+        },
+      ],
+      highlights: [],
+      reviewComplete: true,
+    };
+
+    await postReview(mockOctokit, 'owner', 'repo', 1, 'sha', result);
+    const body = mockCreateReview.mock.calls[0][0].body as string;
+    expect(body).toContain('`src/utils.ts`');
   });
 });
 
