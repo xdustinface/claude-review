@@ -2,7 +2,7 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 
 import { ClaudeClient } from './claude';
-import { writeSuppression, writeLearning } from './memory';
+import { writeSuppression, writeLearning, sanitizeMemoryField } from './memory';
 
 type Octokit = ReturnType<typeof github.getOctokit>;
 
@@ -87,14 +87,18 @@ export async function handleReviewCommentReply(
       const simpleAcks = ['ok', 'done', 'fixed', 'thanks', 'will do', 'got it'];
       const isSubstantive = replyBody.length > 50 && !simpleAcks.includes(replyBody.toLowerCase());
 
-      if (isSubstantive) {
+      const authorAssociation = comment.author_association;
+      const isTrusted = ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(authorAssociation ?? '');
+
+      if (isSubstantive && isTrusted) {
         try {
           const memoryOctokit = github.getOctokit(memoryToken);
           const memoryRepo = memoryConfig.repo || `${owner}/review-memory`;
+          const sanitized = sanitizeMemoryField(replyBody.slice(0, 500));
 
           await writeLearning(memoryOctokit, memoryRepo, repo, {
             id: `learn-${Date.now()}`,
-            content: `User context on "${parentComment.path}": ${replyBody.slice(0, 500)}`,
+            content: `User context on "${parentComment.path}": ${sanitized}`,
             scope: 'repo',
             source: `${owner}/${repo}#${prNumber}`,
             created_at: new Date().toISOString().split('T')[0],
@@ -212,21 +216,31 @@ async function handleDismiss(
   memoryConfig?: MemoryConfig,
   memoryToken?: string,
 ): Promise<void> {
+  const sanitizedPattern = findingRef
+    .replace(/</g, '').replace(/>/g, '')
+    .slice(0, 200)
+    .trim();
+
+  if (findingRef && sanitizedPattern.length < 3) {
+    core.warning('Finding reference too short to create suppression');
+    return;
+  }
+
   await octokit.rest.issues.createComment({
     owner,
     repo,
     issue_number: prNumber,
-    body: `${BOT_MARKER}\nDismissed${findingRef ? `: ${findingRef}` : ''}. ${memoryConfig?.enabled ? 'Stored as suppression in review memory.' : 'Enable memory to persist this for future reviews.'}`,
+    body: `${BOT_MARKER}\nDismissed${sanitizedPattern ? `: ${sanitizedPattern}` : ''}. ${memoryConfig?.enabled ? 'Stored as suppression in review memory.' : 'Enable memory to persist this for future reviews.'}`,
   });
 
-  if (memoryConfig?.enabled && memoryToken && findingRef) {
+  if (memoryConfig?.enabled && memoryToken && sanitizedPattern) {
     try {
       const memoryOctokit = github.getOctokit(memoryToken);
       const memoryRepo = memoryConfig.repo || `${owner}/review-memory`;
 
       await writeSuppression(memoryOctokit, memoryRepo, repo, {
         id: `supp-${Date.now()}`,
-        pattern: findingRef,
+        pattern: sanitizedPattern,
         reason: `Dismissed by user on PR #${prNumber}`,
         created_by: github.context.actor,
         created_at: new Date().toISOString().split('T')[0],

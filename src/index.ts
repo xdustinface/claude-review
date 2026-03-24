@@ -366,7 +366,14 @@ async function handleInteraction(): Promise<void> {
   });
 
   const { owner, repo } = github.context.repo;
-  const baseRef = github.context.payload.issue?.pull_request ? 'main' : 'main';
+  const prNumber = github.context.payload.issue?.number;
+
+  let baseRef = 'main';
+  if (prNumber) {
+    const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+    baseRef = pr.base.ref;
+  }
+
   const configContent = await fetchConfigFile(octokit, owner, repo, baseRef, configPath);
   const config = loadConfig(configContent ?? undefined);
 
