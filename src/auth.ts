@@ -40,6 +40,7 @@ async function getInstallationToken(
   });
 
   const appAuth = await auth({ type: 'app' });
+  core.setSecret(appAuth.token);
   const appOctokit = github.getOctokit(appAuth.token);
 
   const owner = github.context.repo.owner;
@@ -56,6 +57,7 @@ async function getInstallationToken(
       installationId: installation.id,
     });
 
+    core.setSecret(installationAuth.token);
     core.info(`Authenticated as GitHub App (installation ${installation.id})`);
     return installationAuth.token;
   } catch (error) {
