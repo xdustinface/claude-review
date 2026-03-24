@@ -163,6 +163,20 @@ export async function handlePRComment(
       await reactToIssueComment(octokit, owner, repo, commentId, 'eyes');
       await handleRemember(octokit, owner, repo, prNumber, command.args, memoryConfig, memoryToken);
       break;
+    case 'forget':
+      await octokit.rest.issues.createComment({
+        owner, repo,
+        issue_number: prNumber,
+        body: `${BOT_MARKER}\nThe \`forget\` command is not yet implemented. You can manually remove learnings from the memory repo.`,
+      });
+      break;
+    case 'check':
+      await octokit.rest.issues.createComment({
+        owner, repo,
+        issue_number: prNumber,
+        body: `${BOT_MARKER}\nThe \`check\` command is not yet implemented. It will trigger an auto-approve state check in a future release.`,
+      });
+      break;
     case 'help':
       await reactToIssueComment(octokit, owner, repo, commentId, '+1');
       await handleHelp(octokit, owner, repo, prNumber);
