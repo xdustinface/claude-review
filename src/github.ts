@@ -185,7 +185,8 @@ export async function postReview(
     if (!f.file || f.line <= 0) {
       const location = f.file ? ` — \`${f.file}\`` : '';
       const safeTitle = sanitizeMarkdown(f.title);
-      const safeDesc = sanitizeMarkdown(f.description);
+      const fullDesc = sanitizeMarkdown(f.description);
+      const safeDesc = fullDesc.length > 300 ? fullDesc.slice(0, 300) + '...' : fullDesc;
       let entry = `**[${getSeverityLabel(f.severity)}] ${safeTitle}**${location}\n  ${safeDesc}`;
       if (f.suggestedFix) {
         const fix = f.suggestedFix.length > 200
@@ -335,15 +336,17 @@ function formatFindingComment(finding: Finding): string {
   let comment = `${severityEmoji} **${severityLabel}**: ${safeTitle}\n\n${safeDescription}`;
 
   if (finding.suggestedFix) {
-    comment += `\n\n<details>\n<summary>Suggested fix</summary>\n\n\`\`\`suggestion\n${finding.suggestedFix}\n\`\`\`\n</details>`;
+    const maxBt = (finding.suggestedFix.match(/`+/g) || []).reduce((max, s) => Math.max(max, s.length), 0);
+    const fence = '`'.repeat(Math.max(3, maxBt + 1));
+    comment += `\n\n<details>\n<summary>Suggested fix</summary>\n\n${fence}suggestion\n${finding.suggestedFix}\n${fence}\n</details>`;
   }
 
   comment += '\n\n<details>\n<summary>🤖 Prompt for AI Agents</summary>\n\n';
   comment += `**File:** \`${finding.file}\`\n`;
   comment += `**Line:** ${finding.line}\n`;
-  comment += `**Finding:** ${finding.title}\n`;
+  comment += `**Finding:** ${safeTitle}\n`;
   comment += `**Severity:** ${finding.severity}\n\n`;
-  comment += `**Description:**\n${finding.description}\n`;
+  comment += `**Description:**\n${safeDescription}\n`;
 
   if (finding.suggestedFix) {
     comment += `\n**Suggested fix:**\n\`\`\`\n${finding.suggestedFix}\n\`\`\`\n`;

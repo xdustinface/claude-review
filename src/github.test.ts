@@ -1,4 +1,4 @@
-import { formatFindingComment, mapVerdictToEvent, BOT_MARKER, buildNitIssueBody, getSeverityLabel, postReview } from './github';
+import { formatFindingComment, mapVerdictToEvent, BOT_MARKER, buildNitIssueBody, getSeverityLabel, postReview, sanitizeMarkdown } from './github';
 import { Finding, ReviewResult } from './types';
 
 describe('formatFindingComment', () => {
@@ -446,5 +446,33 @@ describe('getSeverityLabel', () => {
 
   it('returns Question for question severity', () => {
     expect(getSeverityLabel('question')).toBe('Question');
+  });
+});
+
+describe('sanitizeMarkdown', () => {
+  it('strips HTML comments', () => {
+    expect(sanitizeMarkdown('before <!-- hidden --> after')).toBe('before  after');
+  });
+
+  it('strips HTML tags', () => {
+    expect(sanitizeMarkdown('hello <script>alert(1)</script> world')).toBe('hello alert(1) world');
+  });
+
+  it('strips multiline HTML comments', () => {
+    expect(sanitizeMarkdown('a <!-- multi\nline\ncomment --> b')).toBe('a  b');
+  });
+
+  it('preserves regular markdown (bold, links)', () => {
+    const md = '**bold** and [link](https://example.com)';
+    expect(sanitizeMarkdown(md)).toBe(md);
+  });
+
+  it('handles empty string', () => {
+    expect(sanitizeMarkdown('')).toBe('');
+  });
+
+  it('handles string with no HTML', () => {
+    const plain = 'Just a regular string with `code` and *emphasis*.';
+    expect(sanitizeMarkdown(plain)).toBe(plain);
   });
 });

@@ -95,6 +95,7 @@ export class ClaudeClient {
       let settled = false;
       let killTimer: NodeJS.Timeout | undefined;
       let outputKillTimer: NodeJS.Timeout | undefined;
+      // Only set in the catch block below; clearTimeout(undefined) is a no-op on the normal path
       let stdinKillTimer: NodeJS.Timeout | undefined;
 
       const timer = setTimeout(() => {
