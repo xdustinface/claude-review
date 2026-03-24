@@ -5,9 +5,11 @@
 # model: claude-opus-4-6
 
 # Automatically review PRs on open/update (default: true)
+# When false, reviews only run via @manki review
 # auto_review: true
 
 # Auto-approve when all blocking findings are resolved (default: true)
+# Triggers on thread resolution and via @manki check
 # auto_approve: true
 
 # Review language (default: en)
@@ -25,6 +27,7 @@
 # max_diff_lines: 10000
 
 # Reviewer agents (defaults shown below)
+# Each agent reviews the diff independently, then findings are consolidated
 # reviewers:
 #   - name: "Security & Correctness"
 #     focus: "bugs, vulnerabilities, memory safety, data integrity, input validation"
@@ -38,6 +41,7 @@
 #   This is a Rust project. Focus on ownership and error handling.
 
 # Review memory (requires memory_repo_token)
+# Stores learnings, suppressions, and patterns to improve reviews over time
 # memory:
 #   enabled: false
 #   repo: ""  # defaults to {owner}/review-memory
