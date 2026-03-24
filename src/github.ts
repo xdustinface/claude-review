@@ -185,9 +185,12 @@ export async function postReview(
     if (!f.file || f.line <= 0) {
       let entry = `**[${getSeverityLabel(f.severity)}] ${f.title}**\n  ${f.description}`;
       if (f.suggestedFix) {
-        const fix = f.suggestedFix.slice(0, 200);
+        const fix = f.suggestedFix.length > 200
+          ? f.suggestedFix.slice(0, 200) + '...'
+          : f.suggestedFix;
         if (fix.includes('`') || fix.includes('\n')) {
-          entry += `\n  \`\`\`\n  ${fix}\n  \`\`\``;
+          const escaped = fix.replace(/`{3,}/g, '`` `');
+          entry += `\n  \`\`\`\n  ${escaped}\n  \`\`\``;
         } else {
           entry += `\n  Fix: \`${fix}\``;
         }

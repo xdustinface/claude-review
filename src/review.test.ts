@@ -786,13 +786,14 @@ describe('titlesMatch boundary', () => {
 });
 
 describe('selectTeam dependency file scoring', () => {
-  it('falls back to large team size for unrecognized review_level values', () => {
+  it('falls back to auto sizing for unrecognized review_level values', () => {
     const diff = makeDiff({ totalAdditions: 10, totalDeletions: 5 });
     // Force an invalid review_level at runtime (e.g. from misconfigured YAML)
     const config = makeConfig({ review_level: 'thorough' as 'large' });
     const roster = selectTeam(diff, config);
-    // The ternary chain treats unrecognized levels as large (teamSize = 7)
-    expect(roster.agents).toHaveLength(7);
+    // Unrecognized levels fall back to auto; 15 lines < 200 threshold = small
+    expect(roster.level).toBe('small');
+    expect(roster.agents).toHaveLength(3);
   });
 
   it('scores Dependencies agent higher when package.json is in the diff', () => {

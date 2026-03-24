@@ -281,8 +281,9 @@ describe('postReview generalFindings', () => {
     };
 
     await postReview(mockOctokit, 'owner', 'repo', 1, 'sha', result);
-    const body = mockCreateReview.mock.calls[0][0].body as string;
-    expect(body).toContain('Fix: `try { op(); } catch (e) { handle(e); }`');
+    const call = mockCreateReview.mock.calls[0][0];
+    expect(call.event).toBe('APPROVE');
+    expect(call.body).toContain('Fix: `try { op(); } catch (e) { handle(e); }`');
   });
 
   it('omits Fix line when finding has no suggestedFix', async () => {
@@ -304,8 +305,9 @@ describe('postReview generalFindings', () => {
     };
 
     await postReview(mockOctokit, 'owner', 'repo', 1, 'sha', result);
-    const body = mockCreateReview.mock.calls[0][0].body as string;
-    expect(body).not.toContain('Fix:');
+    const call = mockCreateReview.mock.calls[0][0];
+    expect(call.event).toBe('APPROVE');
+    expect(call.body).not.toContain('Fix:');
   });
 
   it('truncates long suggestedFix to 200 chars in general findings', async () => {
@@ -330,8 +332,8 @@ describe('postReview generalFindings', () => {
 
     await postReview(mockOctokit, 'owner', 'repo', 1, 'sha', result);
     const body = mockCreateReview.mock.calls[0][0].body as string;
-    expect(body).toContain('Fix: `' + 'x'.repeat(200) + '`');
-    expect(body).not.toContain('x'.repeat(250));
+    expect(body).toContain('x'.repeat(200) + '...');
+    expect(body).not.toContain('x'.repeat(201));
   });
 
   it('uses code block for suggestedFix containing backticks', async () => {
@@ -359,6 +361,31 @@ describe('postReview generalFindings', () => {
     expect(body).toContain('```');
     expect(body).toContain(fixWithBackticks);
     expect(body).not.toContain('Fix: `');
+  });
+
+  it('escapes triple backticks in suggestedFix to prevent broken code fences', async () => {
+    const result: ReviewResult = {
+      verdict: 'APPROVE',
+      summary: 'Summary',
+      findings: [
+        {
+          severity: 'suggestion',
+          title: 'Fence break',
+          file: '',
+          line: 0,
+          description: 'Desc.',
+          suggestedFix: 'some ```code``` here',
+          reviewers: [],
+        },
+      ],
+      highlights: [],
+      reviewComplete: true,
+    };
+
+    await postReview(mockOctokit, 'owner', 'repo', 1, 'sha', result);
+    const body = mockCreateReview.mock.calls[0][0].body as string;
+    expect(body).not.toContain('some ```code');
+    expect(body).toContain('some `` `code`` ` here');
   });
 
   it('includes description in general findings', async () => {

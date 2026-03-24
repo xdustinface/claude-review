@@ -45,13 +45,17 @@ export function selectTeam(
   const lineCount = diff.totalAdditions + diff.totalDeletions;
 
   let level: 'small' | 'medium' | 'large';
-  if (config.review_level === 'auto') {
+  const configLevel = config.review_level;
+  if (configLevel === 'auto' || !['small', 'medium', 'large'].includes(configLevel)) {
+    if (configLevel !== 'auto') {
+      core.warning(`Unrecognized review_level "${configLevel}", using auto`);
+    }
     const thresholds = config.review_thresholds || { small: 200, medium: 1000 };
     if (lineCount < thresholds.small) level = 'small';
     else if (lineCount < thresholds.medium) level = 'medium';
     else level = 'large';
   } else {
-    level = config.review_level;
+    level = configLevel as 'small' | 'medium' | 'large';
   }
 
   const teamSize = level === 'small' ? 3 : level === 'medium' ? 5 : 7;
