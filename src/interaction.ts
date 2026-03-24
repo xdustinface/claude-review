@@ -4,6 +4,7 @@ import * as github from '@actions/github';
 import { ClaudeClient } from './claude';
 import { writeSuppression, writeLearning, sanitizeMemoryField } from './memory';
 import { reactToIssueComment, reactToReviewComment } from './github';
+import { checkAndAutoApprove, fetchBotReviewThreads } from './state';
 
 type Octokit = ReturnType<typeof github.getOctokit>;
 
@@ -171,11 +172,8 @@ export async function handlePRComment(
       });
       break;
     case 'check':
-      await octokit.rest.issues.createComment({
-        owner, repo,
-        issue_number: prNumber,
-        body: `${BOT_MARKER}\nThe \`check\` command is not yet implemented. It will trigger an auto-approve state check in a future release.`,
-      });
+      await reactToIssueComment(octokit, owner, repo, commentId, 'eyes');
+      await handleCheck(octokit, owner, repo, prNumber);
       break;
     case 'help':
       await reactToIssueComment(octokit, owner, repo, commentId, '+1');
@@ -297,7 +295,7 @@ async function handleHelp(
     owner,
     repo,
     issue_number: prNumber,
-    body: `${BOT_MARKER}\n**Manki Commands:**\n\n| Command | Description |\n|---------|-------------|\n| \`@manki review\` | Run a full multi-agent review |\n| \`@manki explain [topic]\` | Explain something about this PR |\n| \`@manki dismiss [finding]\` | Dismiss a review finding |\n| \`@manki remember <instruction>\` | Teach the reviewer something for future reviews |\n| \`@manki remember global: <instruction>\` | Teach globally (all repos) |\n| \`@manki help\` | Show this help message |\n\nYou can also reply to any review comment to start a conversation.`,
+    body: `${BOT_MARKER}\n**Manki Commands:**\n\n| Command | Description |\n|---------|-------------|\n| \`@manki review\` | Run a full multi-agent review |\n| \`@manki explain [topic]\` | Explain something about this PR |\n| \`@manki dismiss [finding]\` | Dismiss a review finding |\n| \`@manki remember <instruction>\` | Teach the reviewer something for future reviews |\n| \`@manki remember global: <instruction>\` | Teach globally (all repos) |\n| \`@manki check\` | Check if all blocking issues are resolved and auto-approve |\n| \`@manki help\` | Show this help message |\n\nYou can also reply to any review comment to start a conversation.`,
   });
 }
 
@@ -376,6 +374,35 @@ async function handleRemember(
       issue_number: prNumber,
       body: `${BOT_MARKER}\nFailed to store learning. Check that the memory repo token has write access.`,
     });
+  }
+}
+
+async function handleCheck(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<void> {
+  const approved = await checkAndAutoApprove(octokit, owner, repo, prNumber);
+
+  if (!approved) {
+    const threads = await fetchBotReviewThreads(octokit, owner, repo, prNumber);
+    const blocking = threads.filter(t => t.isBlocking && !t.isResolved);
+
+    if (blocking.length > 0) {
+      const list = blocking.map(t => `- "${t.findingTitle}"`).join('\n');
+      await octokit.rest.issues.createComment({
+        owner, repo,
+        issue_number: prNumber,
+        body: `${BOT_MARKER}\n**${blocking.length} blocking issue(s) still open:**\n\n${list}\n\nResolve all blocking threads to trigger auto-approval.`,
+      });
+    } else {
+      await octokit.rest.issues.createComment({
+        owner, repo,
+        issue_number: prNumber,
+        body: `${BOT_MARKER}\nNo blocking issues found. Checking approval status...`,
+      });
+    }
   }
 }
 
