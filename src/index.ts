@@ -262,6 +262,15 @@ async function handleReviewStateCheck(): Promise<void> {
 
   const { owner, repo } = github.context.repo;
   const prNumber = pr.number;
+  const configPath = core.getInput('config_path') || '.claude-review.yml';
+
+  const configContent = await fetchConfigFile(octokit, owner, repo, pr.base.ref, configPath);
+  const config = loadConfig(configContent ?? undefined);
+
+  if (!config.auto_approve) {
+    core.info('auto_approve is disabled — skipping state check');
+    return;
+  }
 
   const approved = await checkAndAutoApprove(octokit, owner, repo, prNumber);
   if (approved) {
@@ -302,16 +311,42 @@ async function handleInteraction(): Promise<void> {
 }
 
 async function handleReviewCommentInteraction(): Promise<void> {
+  const payload = github.context.payload;
+  const comment = payload.comment;
+
+  if (!comment) return;
+
+  // Don't respond to our own comments
+  if (comment.user?.type === 'Bot' || comment.body?.includes('<!-- claude-review')) {
+    return;
+  }
+
+  // Only respond if this is a reply to a bot comment or mentions @claude
+  const body = comment.body?.toLowerCase() ?? '';
+  const isReplyToBot = !!comment.in_reply_to_id; // handleReviewCommentReply will verify it's actually our comment
+  const mentionsClaude = body.includes('@claude');
+
+  if (!isReplyToBot && !mentionsClaude) {
+    core.info('Review comment is not a reply to bot or @claude mention — skipping');
+    return;
+  }
+
   const githubToken = core.getInput('github_token', { required: true });
   const oauthToken = core.getInput('claude_code_oauth_token');
   const apiKey = core.getInput('anthropic_api_key');
-  const modelOverride = core.getInput('model');
+  const configPath = core.getInput('config_path') || '.claude-review.yml';
 
   const octokit = github.getOctokit(githubToken);
+  const { owner, repo } = github.context.repo;
+
+  const baseRef = payload.pull_request?.base?.ref ?? 'main';
+  const configContent = await fetchConfigFile(octokit, owner, repo, baseRef, configPath);
+  const config = loadConfig(configContent ?? undefined);
+
   const claude = new ClaudeClient({
     oauthToken: oauthToken || undefined,
     apiKey: apiKey || undefined,
-    model: modelOverride || 'claude-opus-4-6',
+    model: config.model,
   });
 
   await handleReviewCommentReply(octokit, claude);
