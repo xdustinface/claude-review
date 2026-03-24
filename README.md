@@ -100,8 +100,8 @@ exclude_paths: ["*.lock"]
 # Team sizing: auto (default), small (3), medium (5), large (7)
 review_level: auto
 review_thresholds:
-  small: 100
-  medium: 500
+  small: 200
+  medium: 1000
 
 # Teach Manki about your project
 instructions: |

@@ -46,7 +46,7 @@ export function selectTeam(
 
   let level: ReviewLevel = config.review_level;
   if (level === 'auto') {
-    const thresholds = config.review_thresholds || { small: 100, medium: 500 };
+    const thresholds = config.review_thresholds || { small: 200, medium: 1000 };
     if (lineCount < thresholds.small) level = 'small';
     else if (lineCount < thresholds.medium) level = 'medium';
     else level = 'large';

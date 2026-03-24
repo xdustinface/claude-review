@@ -29,8 +29,8 @@
 # Team sizing: auto (default), small (3 agents), medium (5), large (7)
 # review_level: auto
 # review_thresholds:
-#   small: 100   # diffs under this many lines get a small team
-#   medium: 500  # diffs under this many lines get a medium team
+#   small: 200   # diffs under this many lines get a small team
+#   medium: 1000  # diffs under this many lines get a medium team
 
 # Custom reviewer agents (added to the built-in 7-agent pool)
 # The built-in pool covers: Security, Architecture, Correctness, Testing,

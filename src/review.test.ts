@@ -22,7 +22,7 @@ const makeConfig = (overrides: Partial<ReviewConfig> = {}): ReviewConfig => ({
   reviewers: [],
   instructions: '',
   review_level: 'auto',
-  review_thresholds: { small: 100, medium: 500 },
+  review_thresholds: { small: 200, medium: 1000 },
   memory: { enabled: false, repo: '' },
   ...overrides,
 });
@@ -415,7 +415,7 @@ describe('selectTeam', () => {
   });
 
   it('selects large team for diffs above medium threshold', () => {
-    const diff = makeDiff({ totalAdditions: 300, totalDeletions: 300 });
+    const diff = makeDiff({ totalAdditions: 600, totalDeletions: 600 });
     const config = makeConfig();
     const roster = selectTeam(diff, config);
     expect(roster.level).toBe('large');

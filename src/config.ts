@@ -30,7 +30,7 @@ export const DEFAULT_CONFIG: ReviewConfig = {
   reviewers: DEFAULT_REVIEWERS,
   instructions: '',
   review_level: 'auto',
-  review_thresholds: { small: 100, medium: 500 },
+  review_thresholds: { small: 200, medium: 1000 },
   memory: {
     enabled: false,
     repo: '',
