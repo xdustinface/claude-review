@@ -9,13 +9,16 @@ export async function runReview(
   _diff: ParsedDiff,
   rawDiff: string,
   repoContext: string,
+  memoryContext?: string,
 ): Promise<ReviewResult> {
   const reviewerNames = config.reviewers.map(r => r.name).join(', ');
   core.info(`Running ${config.reviewers.length} reviewer agents in parallel: ${reviewerNames}`);
 
+  const fullContext = memoryContext ? `${repoContext}\n\n${memoryContext}` : repoContext;
+
   const agentResults = await Promise.allSettled(
     config.reviewers.map(reviewer =>
-      runReviewerAgent(client, config, reviewer, rawDiff, repoContext)
+      runReviewerAgent(client, config, reviewer, rawDiff, fullContext)
     )
   );
 
@@ -226,8 +229,7 @@ Respond with ONLY a JSON object (no markdown fences):
 ## Verdict Rules
 
 - **REQUEST_CHANGES**: If ANY finding is "blocking"
-- **COMMENT**: If there are only "suggestion" or "question" findings
-- **APPROVE**: If there are NO findings at all
+- **APPROVE**: If there are no blocking findings (suggestions and questions are fine)
 
 ## Rules
 
@@ -292,9 +294,6 @@ export function parseConsolidatedReview(responseText: string): ReviewResult {
 
 export function determineVerdict(claimed: unknown, findings: Finding[]): ReviewVerdict {
   const hasBlocking = findings.some(f => f.severity === 'blocking');
-  const hasFindings = findings.length > 0;
-
   if (hasBlocking) return 'REQUEST_CHANGES';
-  if (hasFindings) return 'COMMENT';
-  return 'APPROVE';
+  return 'APPROVE'; // Approve even with suggestions — nits don't block PRs
 }
