@@ -135,7 +135,7 @@ export async function updateProgressComment(
     owner,
     repo,
     comment_id: commentId,
-    body: `${BOT_MARKER}\n${emoji} **Manki** — ${result.verdict.replace('_', ' ')}\n\n${safeSummary}${findingsSummary}${highlights}`,
+    body: truncateBody(`${BOT_MARKER}\n${emoji} **Manki** — ${result.verdict.replace('_', ' ')}\n\n${safeSummary}${findingsSummary}${highlights}`),
   });
 }
 
@@ -330,12 +330,14 @@ function dynamicFence(content: string): string {
 
 function truncateBody(text: string, maxLength: number = 60000): string {
   if (text.length <= maxLength) return text;
-  const cutoff = text.lastIndexOf(' ', maxLength);
-  return text.slice(0, cutoff > maxLength - 100 ? cutoff : maxLength) + '\n\n*(Review body truncated)*';
+  const notice = '\n\n*(Review body truncated)*';
+  const effectiveMax = maxLength - notice.length;
+  const cutoff = text.lastIndexOf(' ', effectiveMax);
+  return text.slice(0, cutoff > effectiveMax - 100 ? cutoff : effectiveMax) + notice;
 }
 
 function sanitizeFilePath(file: string): string {
-  return file.replace(/`/g, "'").replace(/\n/g, ' ');
+  return file.replace(/`/g, "'").replace(/[\n\r]/g, ' ');
 }
 
 function mapVerdictToEvent(verdict: ReviewVerdict): 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES' {

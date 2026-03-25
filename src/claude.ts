@@ -113,6 +113,7 @@ export class ClaudeClient {
         killTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already dead */ } }, 5000);
         killTimer.unref();
       }, 300000);
+      timer.unref();
 
       const MAX_OUTPUT = 50 * 1024 * 1024; // 50 MB
       const killOnOutputExceeded = (): void => {
