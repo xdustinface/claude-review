@@ -55,7 +55,6 @@ export async function fetchConfigFile(
   }
 }
 
-const REFERENCE_REGEX = /^@(\S+\.md)\s*$/gm;
 const MAX_RESOLVE_DEPTH = 3;
 
 /**
@@ -75,20 +74,22 @@ async function resolveReferences(
     return content;
   }
 
-  const matches: Array<{ fullMatch: string; filePath: string }> = [];
-  let match: RegExpExecArray | null;
-  const regex = new RegExp(REFERENCE_REGEX.source, REFERENCE_REGEX.flags);
-  while ((match = regex.exec(content)) !== null) {
-    matches.push({ fullMatch: match[0], filePath: match[1] });
-  }
+  const lines = content.split('\n');
+  const resolvedLines: string[] = [];
 
-  if (matches.length === 0) {
-    return content;
-  }
+  for (const line of lines) {
+    const match = line.match(/^@(\S+\.md)\s*$/);
+    if (!match) {
+      resolvedLines.push(line);
+      continue;
+    }
 
-  let resolved = content;
-  for (const { fullMatch, filePath } of matches) {
-    if (filePath.includes('..')) continue;  // skip path traversal attempts
+    const filePath = match[1];
+    if (filePath.includes('..')) {
+      resolvedLines.push(line);
+      continue;
+    }
+
     const resolvedPath = basePath ? `${basePath}/${filePath}` : filePath;
     try {
       const { data } = await octokit.rest.repos.getContent({ owner, repo, path: resolvedPath, ref });
@@ -96,14 +97,15 @@ async function resolveReferences(
         let fileContent = Buffer.from(data.content, 'base64').toString('utf-8');
         const fileDir = resolvedPath.includes('/') ? resolvedPath.substring(0, resolvedPath.lastIndexOf('/')) : '';
         fileContent = await resolveReferences(octokit, owner, repo, ref, fileContent, fileDir, depth + 1);
-        resolved = resolved.replaceAll(fullMatch, () => fileContent.trimEnd());
+        resolvedLines.push(fileContent.trimEnd());
       }
     } catch {
-      resolved = resolved.replaceAll(fullMatch, () => `${fullMatch}\n<!-- Could not resolve reference: ${filePath} -->`);
+      resolvedLines.push(line);
+      resolvedLines.push(`<!-- Could not resolve reference: ${filePath} -->`);
     }
   }
 
-  return resolved;
+  return resolvedLines.join('\n');
 }
 
 /**
