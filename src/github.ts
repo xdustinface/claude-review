@@ -243,7 +243,9 @@ export async function postReview(
 
   const MAX_BODY_LENGTH = 60000; // GitHub limit is 65536
   if (body.length > MAX_BODY_LENGTH) {
-    body = body.slice(0, MAX_BODY_LENGTH) + '\n\n*(Review body truncated)*';
+    // Find last space before the limit to avoid splitting words/unicode
+    const cutoff = body.lastIndexOf(' ', MAX_BODY_LENGTH);
+    body = body.slice(0, cutoff > MAX_BODY_LENGTH - 100 ? cutoff : MAX_BODY_LENGTH) + '\n\n*(Review body truncated)*';
   }
 
   if (invalidComments.length > 0) {
@@ -275,7 +277,8 @@ export async function postReview(
       const allAsBody = validComments.map(c => `- ${c.body.split('\n')[0]}`).join('\n');
       let lineErrFallbackBody = `${body}\n\n**Inline comments could not be posted:**\n${allAsBody}`;
       if (lineErrFallbackBody.length > MAX_BODY_LENGTH) {
-        lineErrFallbackBody = lineErrFallbackBody.slice(0, MAX_BODY_LENGTH) + '\n\n*(Review body truncated)*';
+        const cutoff = lineErrFallbackBody.lastIndexOf(' ', MAX_BODY_LENGTH);
+        lineErrFallbackBody = lineErrFallbackBody.slice(0, cutoff > MAX_BODY_LENGTH - 100 ? cutoff : MAX_BODY_LENGTH) + '\n\n*(Review body truncated)*';
       }
 
       const { data: review } = await octokit.rest.pulls.createReview({
@@ -307,7 +310,8 @@ export async function postReview(
     }).join('\n');
     let fallbackBody = `${body}\n\n**Findings (could not post inline):**\n${findingSummary}`;
     if (fallbackBody.length > MAX_BODY_LENGTH) {
-      fallbackBody = fallbackBody.slice(0, MAX_BODY_LENGTH) + '\n\n*(Review body truncated)*';
+      const cutoff = fallbackBody.lastIndexOf(' ', MAX_BODY_LENGTH);
+      fallbackBody = fallbackBody.slice(0, cutoff > MAX_BODY_LENGTH - 100 ? cutoff : MAX_BODY_LENGTH) + '\n\n*(Review body truncated)*';
     }
 
     const { data: review } = await octokit.rest.pulls.createReview({

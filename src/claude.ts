@@ -82,6 +82,8 @@ export class ClaudeClient {
         '--model', this.model,
       ], {
         env: {
+          // process.env is spread intentionally — Claude CLI requires PATH, HOME, and other system vars.
+          // CLAUDE_CODE_OAUTH_TOKEN is added conditionally. Secrets should be managed via GitHub Actions secret masking.
           ...process.env,
           ...(this.oauthToken ? { CLAUDE_CODE_OAUTH_TOKEN: this.oauthToken } : {}),
         },

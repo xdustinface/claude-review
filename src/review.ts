@@ -316,6 +316,8 @@ export function tallyVotes(
   votes: AgentVote[],
   teamSize: number,
 ): Finding[] {
+  if (teamSize <= 0) return findings.map(f => ({ ...f }));
+
   const results: Finding[] = [];
   const majority = Math.ceil(teamSize / 2);
 

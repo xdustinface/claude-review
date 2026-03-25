@@ -550,6 +550,12 @@ describe('sanitizeMarkdown', () => {
     expect(sanitizeMarkdown('inline <math>x+1</math> formula')).toBe('inline x+1 formula');
   });
 
+  it('strips reference-style link definitions', () => {
+    expect(sanitizeMarkdown('see [click][1]\n[1]: https://evil.com')).toBe('see click\n');
+    expect(sanitizeMarkdown('[logo]: https://evil.com/img.png "alt"')).toBe('');
+    expect(sanitizeMarkdown('text\n[ref]: http://example.com\nmore')).toBe('text\n\nmore');
+  });
+
   it('strips nested HTML comments', () => {
     const result = sanitizeMarkdown('a <!-- <!-- --> --> b');
     expect(result).not.toContain('<!--');
