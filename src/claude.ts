@@ -100,6 +100,13 @@ export class ClaudeClient {
       // Only set in the catch block below; clearTimeout(undefined) is a no-op on the normal path
       let stdinKillTimer: NodeJS.Timeout | undefined;
 
+      const clearAllTimers = (): void => {
+        clearTimeout(timer);
+        if (killTimer) clearTimeout(killTimer);
+        if (outputKillTimer) clearTimeout(outputKillTimer);
+        if (stdinKillTimer) clearTimeout(stdinKillTimer);
+      };
+
       const timer = setTimeout(() => {
         timedOut = true;
         child.kill('SIGTERM');
@@ -128,10 +135,7 @@ export class ClaudeClient {
       });
 
       child.on('close', (code, signal) => {
-        clearTimeout(timer);
-        if (killTimer) clearTimeout(killTimer);
-        if (outputKillTimer) clearTimeout(outputKillTimer);
-        if (stdinKillTimer) clearTimeout(stdinKillTimer);
+        clearAllTimers();
         if (settled) return;
         settled = true;
         stdout += stdoutDecoder.end();
@@ -158,10 +162,7 @@ export class ClaudeClient {
       });
 
       child.on('error', (error) => {
-        clearTimeout(timer);
-        if (killTimer) clearTimeout(killTimer);
-        if (outputKillTimer) clearTimeout(outputKillTimer);
-        if (stdinKillTimer) clearTimeout(stdinKillTimer);
+        clearAllTimers();
         if (settled) return;
         settled = true;
         reject(new Error(`Claude CLI spawn failed: ${error.message}`));
@@ -192,9 +193,7 @@ export class ClaudeClient {
         core.warning(`stdin write failed: ${(err as Error).message}`);
         if (!settled) {
           settled = true;
-          clearTimeout(timer);
-          if (killTimer) clearTimeout(killTimer);
-          if (outputKillTimer) clearTimeout(outputKillTimer);
+          clearAllTimers();
           reject(new Error(`stdin write failed: ${(err as Error).message}`));
         }
         try { child.kill('SIGTERM'); } catch { /* already dead */ }

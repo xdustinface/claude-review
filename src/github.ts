@@ -187,7 +187,7 @@ export async function postReview(
 
   for (const f of result.findings) {
     if (!f.file || f.line <= 0) {
-      const safeFile = f.file?.replace(/`/g, "'").replace(/\n/g, ' ') ?? '';
+      const safeFile = f.file ? sanitizeFilePath(f.file) : '';
       const location = f.file ? ` — \`${safeFile}\`` : '';
       const safeTitle = sanitizeMarkdown(f.title);
       const fullDesc = sanitizeMarkdown(f.description);
@@ -199,8 +199,7 @@ export async function postReview(
           : f.suggestedFix;
         if (fix.includes('`') || fix.includes('\n')) {
           // Dynamic fence: content inside code fences is literal, so no sanitization needed.
-          const maxBackticks = (fix.match(/`+/g) || []).reduce((max, s) => Math.max(max, s.length), 0);
-          const fence = '`'.repeat(Math.max(3, maxBackticks + 1));
+          const fence = dynamicFence(fix);
           entry += `\n  ${fence}\n  ${fix}\n  ${fence}`;
         } else {
           entry += `\n  Fix: \`${fix}\``;
@@ -224,13 +223,13 @@ export async function postReview(
           } else {
             const desc = sanitizeMarkdown(f.description);
             const truncDesc = desc.length > 200 ? desc.slice(0, 200) + '...' : desc;
-            invalidComments.push(`**[${getSeverityLabel(f.severity)}] ${sanitizeMarkdown(f.title)}** (\`${f.file.replace(/`/g, "'").replace(/\n/g, ' ')}:${f.line}\`): ${truncDesc}`);
+            invalidComments.push(`**[${getSeverityLabel(f.severity)}] ${sanitizeMarkdown(f.title)}** (\`${sanitizeFilePath(f.file)}:${f.line}\`): ${truncDesc}`);
           }
         }
       } else {
         const desc = sanitizeMarkdown(f.description);
         const truncDesc = desc.length > 200 ? desc.slice(0, 200) + '...' : desc;
-        invalidComments.push(`**[${getSeverityLabel(f.severity)}] ${sanitizeMarkdown(f.title)}** (\`${f.file.replace(/`/g, "'").replace(/\n/g, ' ')}:${f.line}\`): ${truncDesc}`);
+        invalidComments.push(`**[${getSeverityLabel(f.severity)}] ${sanitizeMarkdown(f.title)}** (\`${sanitizeFilePath(f.file)}:${f.line}\`): ${truncDesc}`);
       }
     } else {
       validComments.push({ path: f.file, line: f.line, side: 'RIGHT', body: commentBody });
@@ -245,12 +244,7 @@ export async function postReview(
     body += `\n\n**Findings (not on changed lines):**\n${invalidComments.map(c => `- ${c}`).join('\n')}`;
   }
 
-  const MAX_BODY_LENGTH = 60000; // GitHub limit is 65536
-  if (body.length > MAX_BODY_LENGTH) {
-    // Find last space before the limit to avoid splitting words/unicode
-    const cutoff = body.lastIndexOf(' ', MAX_BODY_LENGTH);
-    body = body.slice(0, cutoff > MAX_BODY_LENGTH - 100 ? cutoff : MAX_BODY_LENGTH) + '\n\n*(Review body truncated)*';
-  }
+  body = truncateBody(body);
 
   if (invalidComments.length > 0) {
     core.info(`Moved ${invalidComments.length} comments to review body (lines not in diff)`);
@@ -279,11 +273,7 @@ export async function postReview(
     if (isLineError && validComments.length > 0) {
       core.warning('Inline comments rejected by GitHub (invalid lines). Posting review without inline comments.');
       const allAsBody = validComments.map(c => `- ${c.body.split('\n')[0]}`).join('\n');
-      let lineErrFallbackBody = `${body}\n\n**Inline comments could not be posted:**\n${allAsBody}`;
-      if (lineErrFallbackBody.length > MAX_BODY_LENGTH) {
-        const cutoff = lineErrFallbackBody.lastIndexOf(' ', MAX_BODY_LENGTH);
-        lineErrFallbackBody = lineErrFallbackBody.slice(0, cutoff > MAX_BODY_LENGTH - 100 ? cutoff : MAX_BODY_LENGTH) + '\n\n*(Review body truncated)*';
-      }
+      const lineErrFallbackBody = truncateBody(`${body}\n\n**Inline comments could not be posted:**\n${allAsBody}`);
 
       const { data: review } = await octokit.rest.pulls.createReview({
         owner,
@@ -312,11 +302,7 @@ export async function postReview(
       const firstLine = c.body.split('\n')[0];
       return `- ${firstLine} (\`${c.path}:${c.line}\`)`;
     }).join('\n');
-    let fallbackBody = `${body}\n\n**Findings (could not post inline):**\n${findingSummary}`;
-    if (fallbackBody.length > MAX_BODY_LENGTH) {
-      const cutoff = fallbackBody.lastIndexOf(' ', MAX_BODY_LENGTH);
-      fallbackBody = fallbackBody.slice(0, cutoff > MAX_BODY_LENGTH - 100 ? cutoff : MAX_BODY_LENGTH) + '\n\n*(Review body truncated)*';
-    }
+    const fallbackBody = truncateBody(`${body}\n\n**Findings (could not post inline):**\n${findingSummary}`);
 
     const { data: review } = await octokit.rest.pulls.createReview({
       owner,
@@ -331,6 +317,21 @@ export async function postReview(
     core.info(`Posted fallback COMMENT review #${review.id} (original verdict: ${result.verdict})`);
     return review.id;
   }
+}
+
+function dynamicFence(content: string): string {
+  const maxBt = (content.match(/`+/g) || []).reduce((max: number, s: string) => Math.max(max, s.length), 0);
+  return '`'.repeat(Math.max(3, maxBt + 1));
+}
+
+function truncateBody(text: string, maxLength: number = 60000): string {
+  if (text.length <= maxLength) return text;
+  const cutoff = text.lastIndexOf(' ', maxLength);
+  return text.slice(0, cutoff > maxLength - 100 ? cutoff : maxLength) + '\n\n*(Review body truncated)*';
+}
+
+function sanitizeFilePath(file: string): string {
+  return file.replace(/`/g, "'").replace(/\n/g, ' ');
 }
 
 function mapVerdictToEvent(verdict: ReviewVerdict): 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES' {
@@ -385,12 +386,11 @@ function formatFindingComment(finding: Finding): string {
   if (finding.suggestedFix) {
     // Content inside dynamically-fenced code blocks is rendered literally by GitHub,
     // so HTML/markdown injection is not possible here — no sanitization needed.
-    const maxBt = (finding.suggestedFix.match(/`+/g) || []).reduce((max, s) => Math.max(max, s.length), 0);
-    const fence = '`'.repeat(Math.max(3, maxBt + 1));
+    const fence = dynamicFence(finding.suggestedFix);
     comment += `\n\n<details>\n<summary>Suggested fix</summary>\n\n${fence}suggestion\n${finding.suggestedFix}\n${fence}\n</details>`;
   }
 
-  const safeFile = finding.file.replace(/`/g, "'").replace(/\n/g, ' ');
+  const safeFile = sanitizeFilePath(finding.file);
   comment += '\n\n<details>\n<summary>🤖 Prompt for AI Agents</summary>\n\n';
   comment += `**File:** \`${safeFile}\`\n`;
   comment += `**Line:** ${finding.line}\n`;
@@ -400,9 +400,8 @@ function formatFindingComment(finding: Finding): string {
 
   if (finding.suggestedFix) {
     // Inside a dynamically-fenced code block — GitHub renders literally, safe from injection.
-    const maxBt = (finding.suggestedFix.match(/`+/g) || []).reduce((max, s) => Math.max(max, s.length), 0);
-    const fence = '`'.repeat(Math.max(3, maxBt + 1));
-    comment += `\n**Suggested fix:**\n${fence}\n${finding.suggestedFix}\n${fence}\n`;
+    const fixFence = dynamicFence(finding.suggestedFix);
+    comment += `\n**Suggested fix:**\n${fixFence}\n${finding.suggestedFix}\n${fixFence}\n`;
   }
 
   comment += '\n> **Important:** Before applying this fix, validate the finding in the broader context of the file and surrounding code. The review agent may have missed context that makes this a false positive.\n';
@@ -433,7 +432,7 @@ export function buildNitIssueBody(
     const icon = f.severity === 'suggestion' ? '\u{1F4A1}' : '\u{2753}';
     const safeTitle = sanitizeMarkdown(f.title);
     const safeDescription = sanitizeMarkdown(f.description);
-    const safeFile = f.file.replace(/`/g, "'").replace(/\n/g, ' ');
+    const safeFile = sanitizeFilePath(f.file);
 
     let item = `- [ ] ${icon} **${safeTitle}** \u2014 \`${safeFile}:${f.line}\`\n`;
     item += `  \n  ${safeDescription}\n`;
@@ -446,8 +445,7 @@ export function buildNitIssueBody(
         'css': 'css', 'html': 'html', 'yml': 'yaml', 'yaml': 'yaml',
       };
       const lang = langMap[ext] || ext;
-      const maxBt = (f.codeContext.match(/`+/g) || []).reduce((max, s) => Math.max(max, s.length), 0);
-      const fence = '`'.repeat(Math.max(3, maxBt + 1));
+      const fence = dynamicFence(f.codeContext);
       item += `  \n  ${fence}${lang}\n${f.codeContext}\n  ${fence}\n`;
     }
 
@@ -458,9 +456,8 @@ export function buildNitIssueBody(
     item += `  **Severity:** ${f.severity}\n\n`;
     item += `  **Description:**\n  ${safeDescription}\n`;
     if (f.suggestedFix) {
-      const maxBt = (f.suggestedFix.match(/`+/g) || []).reduce((max, s) => Math.max(max, s.length), 0);
-      const fence = '`'.repeat(Math.max(3, maxBt + 1));
-      item += `  \n  **Suggested fix:**\n  ${fence}\n  ${f.suggestedFix}\n  ${fence}\n`;
+      const fixFence = dynamicFence(f.suggestedFix);
+      item += `  \n  **Suggested fix:**\n  ${fixFence}\n  ${f.suggestedFix}\n  ${fixFence}\n`;
     }
     item += `  \n  > **Important:** Before applying this fix, validate the finding in the broader context of the file and surrounding code.\n`;
     item += `  \n  </details>`;
@@ -572,4 +569,4 @@ export async function reactToReviewComment(
   }
 }
 
-export { formatFindingComment, getSeverityLabel, mapVerdictToEvent, sanitizeMarkdown, BOT_MARKER };
+export { dynamicFence, formatFindingComment, getSeverityLabel, mapVerdictToEvent, sanitizeFilePath, sanitizeMarkdown, truncateBody, BOT_MARKER };
