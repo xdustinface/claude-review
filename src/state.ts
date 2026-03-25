@@ -163,4 +163,84 @@ async function checkAndAutoApprove(
   return true;
 }
 
-export { ReviewThread, areAllRequiredResolved, checkAndAutoApprove, fetchBotReviewThreads, BOT_MARKER };
+/**
+ * Resolve stale bot review threads left over from previous commits (e.g. after force-push).
+ * A thread is stale when its originalCommit differs from the current head SHA.
+ */
+async function resolveStaleThreads(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  currentHeadSha: string,
+): Promise<number> {
+  const query = `
+    query($owner: String!, $repo: String!, $prNumber: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $prNumber) {
+          reviewThreads(first: 100) {
+            nodes {
+              id
+              isResolved
+              originalCommit {
+                oid
+              }
+              comments(first: 1) {
+                nodes {
+                  body
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const result: {
+    repository: {
+      pullRequest: {
+        reviewThreads: {
+          nodes: Array<{
+            id: string;
+            isResolved: boolean;
+            originalCommit: { oid: string } | null;
+            comments: {
+              nodes: Array<{ body: string }>;
+            };
+          }>;
+        };
+      };
+    };
+  } = await octokit.graphql(query, { owner, repo, prNumber });
+
+  const threads = result.repository.pullRequest.reviewThreads.nodes;
+  let resolvedCount = 0;
+
+  for (const thread of threads) {
+    if (thread.isResolved) continue;
+
+    const body = thread.comments.nodes[0]?.body ?? '';
+    if (!body.includes('manki:') && !body.includes(BOT_MARKER)) continue;
+
+    const commitOid = thread.originalCommit?.oid;
+    if (!commitOid || commitOid === currentHeadSha) continue;
+
+    try {
+      await octokit.graphql(`
+        mutation($threadId: ID!) {
+          resolveReviewThread(input: { threadId: $threadId }) {
+            thread { isResolved }
+          }
+        }
+      `, { threadId: thread.id });
+      resolvedCount++;
+    } catch (error) {
+      core.debug(`Failed to resolve stale thread ${thread.id}: ${error}`);
+    }
+  }
+
+  return resolvedCount;
+}
+
+export { ReviewThread, areAllRequiredResolved, checkAndAutoApprove, fetchBotReviewThreads, resolveStaleThreads, BOT_MARKER };
