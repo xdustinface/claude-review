@@ -857,6 +857,16 @@ describe('resolveReferences', () => {
     expect(result).toContain('@rules/loop.md');
   });
 
+  it('skips path traversal attempts', async () => {
+    const octokit = mockOctokit({});
+    const content = 'Before\n@../../etc/passwd.md\nAfter';
+    const result = await resolveReferences(octokit, 'owner', 'repo', 'main', content, '.claude');
+
+    // The traversal reference should remain untouched (not fetched, no error comment)
+    expect(result).toBe(content);
+    expect(octokit.rest.repos.getContent).not.toHaveBeenCalled();
+  });
+
   it('returns content unchanged when there are no references', async () => {
     const octokit = mockOctokit({});
     const content = '## Instructions\n\nJust regular markdown content.';

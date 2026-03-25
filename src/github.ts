@@ -88,6 +88,7 @@ async function resolveReferences(
 
   let resolved = content;
   for (const { fullMatch, filePath } of matches) {
+    if (filePath.includes('..')) continue;  // skip path traversal attempts
     const resolvedPath = basePath ? `${basePath}/${filePath}` : filePath;
     try {
       const { data } = await octokit.rest.repos.getContent({ owner, repo, path: resolvedPath, ref });
