@@ -97,16 +97,16 @@ describe('deduplicateFindings', () => {
     expect(result.duplicates).toHaveLength(0);
   });
 
-  it('does not deduplicate against resolved previous findings (regression detection)', () => {
+  it('deduplicates against resolved previous findings', () => {
     const findings = [makeFinding({ title: 'Missing null check', file: 'src/foo.ts', line: 42 })];
     const previous = [makePrevious({ title: 'Missing null check', file: 'src/foo.ts', line: 42, status: 'resolved' })];
 
     const result = deduplicateFindings(findings, previous);
-    expect(result.unique).toHaveLength(1);
-    expect(result.duplicates).toHaveLength(0);
+    expect(result.unique).toHaveLength(0);
+    expect(result.duplicates).toHaveLength(1);
   });
 
-  it('deduplicates against open previous findings but not resolved ones', () => {
+  it('deduplicates against both open and resolved previous findings', () => {
     const findings = [
       makeFinding({ title: 'Missing null check', file: 'src/foo.ts', line: 42 }),
       makeFinding({ title: 'Unused import', file: 'src/bar.ts', line: 10 }),
@@ -117,10 +117,8 @@ describe('deduplicateFindings', () => {
     ];
 
     const result = deduplicateFindings(findings, previous);
-    expect(result.unique).toHaveLength(1);
-    expect(result.unique[0].title).toBe('Unused import');
-    expect(result.duplicates).toHaveLength(1);
-    expect(result.duplicates[0].title).toBe('Missing null check');
+    expect(result.unique).toHaveLength(0);
+    expect(result.duplicates).toHaveLength(2);
   });
 
   it('matches by title substring', () => {

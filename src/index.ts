@@ -166,6 +166,10 @@ async function runFullReview(
   const progressCommentId = await postProgressComment(octokit, owner, repo, prNumber);
 
   try {
+    // Capture recap state before resolving stale threads so dedup sees
+    // the original open/resolved status of each previous finding.
+    const recap = await fetchRecapState(octokit, owner, repo, prNumber);
+
     const staleCount = await resolveStaleThreads(octokit, owner, repo, prNumber, commitSha);
     if (staleCount > 0) {
       core.info(`Resolved ${staleCount} stale review threads from previous commits`);
@@ -271,8 +275,6 @@ async function runFullReview(
         }
       }
     }
-
-    const recap = await fetchRecapState(octokit, owner, repo, prNumber);
 
     if (recap.previousFindings.length > 0) {
       const autoResolved = await resolveAddressedThreads(

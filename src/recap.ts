@@ -191,7 +191,7 @@ function deduplicateFindings(
 
   for (const finding of newFindings) {
     const isDuplicate = previousFindings.some(prev =>
-      prev.status === 'open' && matchesPrevious(finding, prev)
+      matchesPrevious(finding, prev)
     );
 
     if (isDuplicate) {
