@@ -545,7 +545,8 @@ export function buildNitIssueBody(
     item += `\n  ${permalink}\n`;
 
     if (f.suggestedFix) {
-      item += `\n  **Suggested fix:**\n  ${f.suggestedFix}\n`;
+      const fence = dynamicFence(f.suggestedFix);
+      item += `\n  **Suggested fix:**\n  ${fence}\n  ${f.suggestedFix}\n  ${fence}\n`;
     }
 
     item += `\n  </details>`;

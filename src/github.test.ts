@@ -238,6 +238,22 @@ describe('buildNitIssueBody', () => {
     const body = buildNitIssueBody(42, [nit], 'testowner', 'testrepo', 'abc123');
     expect(body).not.toContain('## Review Nits from PR');
   });
+
+  it('renders multiple findings each in their own details block', () => {
+    const nit2: Finding = { ...nit, title: 'Rename variable', file: 'src/other.ts', line: 20 };
+    const body = buildNitIssueBody(42, [nit, nit2], 'testowner', 'testrepo', 'abc123');
+    const detailsCount = (body.match(/<details><summary>/g) || []).length;
+    expect(detailsCount).toBe(2);
+    const closingCount = (body.match(/<\/details>/g) || []).length;
+    expect(closingCount).toBe(2);
+  });
+
+  it('wraps suggested fix in a code fence', () => {
+    const withFix: Finding = { ...nit, suggestedFix: 'use `const` instead' };
+    const body = buildNitIssueBody(42, [withFix], 'testowner', 'testrepo', 'abc123');
+    expect(body).toContain('```');
+    expect(body).toContain('use `const` instead');
+  });
 });
 
 describe('postReview generalFindings', () => {
