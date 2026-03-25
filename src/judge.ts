@@ -94,17 +94,7 @@ Respond with ONLY a JSON array (no markdown fences, no explanation). Each elemen
 ]
 \`\`\`
 
-The output array may be shorter than the input when duplicates are merged. Preserve the order of first appearance.
-
-## Scope Validation
-
-After evaluating individual findings, check if all changed files relate to the PR's stated purpose (title and description). If any files appear unrelated to the PR scope:
-
-- Create a finding with severity "suggestion" titled "Unrelated change: [filename]"
-- Explain why the file seems out of scope
-- Recommend splitting into a separate PR
-
-Only flag files that are clearly unrelated — don't flag shared config files or test files that naturally accompany the changed code.`;
+The output array may be shorter than the input when duplicates are merged. Preserve the order of first appearance.`;
 
   if (config.instructions) {
     prompt += `\n\n## Project Instructions\n\n${config.instructions}`;

@@ -126,11 +126,9 @@ describe('buildJudgeSystemPrompt', () => {
     expect(prompt).toContain('ONE entry for the merged finding');
   });
 
-  it('includes scope validation instructions', () => {
+  it('does not include scope validation (handled by reviewers)', () => {
     const prompt = buildJudgeSystemPrompt(makeConfig());
-    expect(prompt).toContain('Scope Validation');
-    expect(prompt).toContain('Unrelated change');
-    expect(prompt).toContain('splitting into a separate PR');
+    expect(prompt).not.toContain('Scope Validation');
   });
 
   it('includes severity examples for each level', () => {
