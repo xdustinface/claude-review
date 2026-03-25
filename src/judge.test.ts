@@ -5,9 +5,9 @@ import {
   parseJudgeResponse,
   filterMemoryForFindings,
   runJudgeAgent,
-  JudgedFinding,
   JudgeInput,
 } from './judge';
+import { ClaudeClient } from './claude';
 import { RepoMemory, Learning, Suppression } from './memory';
 import { Finding, ReviewConfig, ParsedDiff, DiffFile, DiffHunk } from './types';
 
@@ -343,12 +343,13 @@ describe('filterMemoryForFindings', () => {
 });
 
 describe('runJudgeAgent', () => {
+  const mockSendMessage = jest.fn();
   const mockClient = {
-    sendMessage: jest.fn(),
-  };
+    sendMessage: mockSendMessage,
+  } as unknown as ClaudeClient;
 
   beforeEach(() => {
-    mockClient.sendMessage.mockReset();
+    mockSendMessage.mockReset();
   });
 
   it('returns empty array for empty findings', async () => {
@@ -359,16 +360,16 @@ describe('runJudgeAgent', () => {
       repoContext: '',
     };
 
-    const result = await runJudgeAgent(mockClient as any, makeConfig(), input);
+    const result = await runJudgeAgent(mockClient, makeConfig(), input);
     expect(result).toEqual([]);
-    expect(mockClient.sendMessage).not.toHaveBeenCalled();
+    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 
   it('calls client and returns updated findings', async () => {
     const judgedResponse = JSON.stringify([
       { title: 'Unused variable', severity: 'ignore', reasoning: 'False positive.', confidence: 'high' },
     ]);
-    mockClient.sendMessage.mockResolvedValue({ content: judgedResponse });
+    mockSendMessage.mockResolvedValue({ content: judgedResponse });
 
     const input: JudgeInput = {
       findings: [makeFinding()],
@@ -377,16 +378,16 @@ describe('runJudgeAgent', () => {
       repoContext: '',
     };
 
-    const result = await runJudgeAgent(mockClient as any, makeConfig(), input);
+    const result = await runJudgeAgent(mockClient, makeConfig(), input);
     expect(result).toHaveLength(1);
     expect(result[0].severity).toBe('ignore');
     expect(result[0].judgeNotes).toBe('False positive.');
     expect(result[0].judgeConfidence).toBe('high');
-    expect(mockClient.sendMessage).toHaveBeenCalledTimes(1);
+    expect(mockSendMessage).toHaveBeenCalledTimes(1);
   });
 
   it('returns originals when judge response is empty', async () => {
-    mockClient.sendMessage.mockResolvedValue({ content: '' });
+    mockSendMessage.mockResolvedValue({ content: '' });
 
     const finding = makeFinding({ severity: 'required' });
     const input: JudgeInput = {
@@ -396,7 +397,7 @@ describe('runJudgeAgent', () => {
       repoContext: '',
     };
 
-    const result = await runJudgeAgent(mockClient as any, makeConfig(), input);
+    const result = await runJudgeAgent(mockClient, makeConfig(), input);
     expect(result).toHaveLength(1);
     expect(result[0].severity).toBe('required');
     expect(result[0].judgeNotes).toBeUndefined();
@@ -407,7 +408,7 @@ describe('runJudgeAgent', () => {
       { title: 'Different title', severity: 'nit', reasoning: 'Minor.', confidence: 'low' },
       { title: 'Unused variable cleanup', severity: 'ignore', reasoning: 'Not real.', confidence: 'high' },
     ]);
-    mockClient.sendMessage.mockResolvedValue({ content: judgedResponse });
+    mockSendMessage.mockResolvedValue({ content: judgedResponse });
 
     const input: JudgeInput = {
       findings: [
@@ -422,7 +423,7 @@ describe('runJudgeAgent', () => {
       repoContext: '',
     };
 
-    const result = await runJudgeAgent(mockClient as any, makeConfig(), input);
+    const result = await runJudgeAgent(mockClient, makeConfig(), input);
     expect(result).toHaveLength(2);
   });
 
@@ -430,7 +431,7 @@ describe('runJudgeAgent', () => {
     const judgedResponse = JSON.stringify([
       { title: 'Unused variable', severity: 'ignore', reasoning: 'Suppressed.', confidence: 'high' },
     ]);
-    mockClient.sendMessage.mockResolvedValue({ content: judgedResponse });
+    mockSendMessage.mockResolvedValue({ content: judgedResponse });
 
     const input: JudgeInput = {
       findings: [makeFinding()],
@@ -440,9 +441,9 @@ describe('runJudgeAgent', () => {
       repoContext: '',
     };
 
-    await runJudgeAgent(mockClient as any, makeConfig(), input);
+    await runJudgeAgent(mockClient, makeConfig(), input);
 
-    const [, userMessage] = mockClient.sendMessage.mock.calls[0];
+    const [, userMessage] = mockSendMessage.mock.calls[0];
     expect(userMessage).toContain('Relevant Suppressions');
   });
 });
