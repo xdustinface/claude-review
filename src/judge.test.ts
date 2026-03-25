@@ -4,8 +4,10 @@ import {
   extractCodeContext,
   parseJudgeResponse,
   filterMemoryForFindings,
+  mapJudgedToFindings,
   runJudgeAgent,
   JudgeInput,
+  JudgedFinding,
 } from './judge';
 import { ClaudeClient } from './claude';
 import { RepoMemory, Learning, Suppression } from './memory';
@@ -116,6 +118,12 @@ describe('buildJudgeSystemPrompt', () => {
   it('defines the judge role', () => {
     const prompt = buildJudgeSystemPrompt(makeConfig());
     expect(prompt).toContain('code review judge');
+  });
+
+  it('includes duplicate detection instructions', () => {
+    const prompt = buildJudgeSystemPrompt(makeConfig());
+    expect(prompt).toContain('Duplicate Detection');
+    expect(prompt).toContain('ONE entry for the merged finding');
   });
 
   it('includes severity examples for each level', () => {
@@ -511,6 +519,80 @@ describe('runJudgeAgent', () => {
 
     const [, userMessage] = mockSendMessage.mock.calls[0];
     expect(userMessage).toContain('Relevant Suppressions');
+  });
+});
+
+describe('mapJudgedToFindings', () => {
+  it('handles 1:1 mapping when judge returns same count', () => {
+    const originals = [
+      makeFinding({ title: 'Bug A', severity: 'suggestion', reviewers: ['R1'] }),
+      makeFinding({ title: 'Bug B', severity: 'suggestion', reviewers: ['R2'], file: 'b.ts' }),
+    ];
+    const judged: JudgedFinding[] = [
+      { title: 'Bug A', severity: 'required', reasoning: 'Real bug.', confidence: 'high' },
+      { title: 'Bug B', severity: 'nit', reasoning: 'Minor.', confidence: 'low' },
+    ];
+
+    const result = mapJudgedToFindings(originals, judged);
+    expect(result).toHaveLength(2);
+    expect(result[0].severity).toBe('required');
+    expect(result[1].severity).toBe('nit');
+  });
+
+  it('handles fewer judge results by merging duplicates', () => {
+    const originals = [
+      makeFinding({ title: 'Null check missing', severity: 'suggestion', reviewers: ['SecurityReviewer'] }),
+      makeFinding({ title: 'Missing null check', severity: 'required', reviewers: ['BugReviewer'] }),
+      makeFinding({ title: 'Unused import', severity: 'nit', reviewers: ['StyleReviewer'] }),
+    ];
+    const judged: JudgedFinding[] = [
+      { title: 'Null check missing', severity: 'required', reasoning: 'Merged findings 1 and 2 — same issue.', confidence: 'high' },
+      { title: 'Unused import', severity: 'nit', reasoning: 'Minor style issue.', confidence: 'medium' },
+    ];
+
+    const result = mapJudgedToFindings(originals, judged);
+    expect(result).toHaveLength(2);
+
+    // First result should have merged reviewers from both null-check findings
+    expect(result[0].severity).toBe('required');
+    expect(result[0].reviewers).toContain('SecurityReviewer');
+    expect(result[0].reviewers).toContain('BugReviewer');
+    expect(result[0].judgeNotes).toContain('Merged findings 1 and 2');
+
+    // Second result maps normally
+    expect(result[1].severity).toBe('nit');
+    expect(result[1].reviewers).toEqual(['StyleReviewer']);
+  });
+
+  it('deduplicates reviewers when merging', () => {
+    const originals = [
+      makeFinding({ title: 'Error handling', reviewers: ['R1', 'R2'] }),
+      makeFinding({ title: 'Error handling missing', reviewers: ['R2', 'R3'] }),
+    ];
+    const judged: JudgedFinding[] = [
+      { title: 'Error handling', severity: 'suggestion', reasoning: 'Merged.', confidence: 'medium' },
+    ];
+
+    const result = mapJudgedToFindings(originals, judged);
+    expect(result).toHaveLength(1);
+    expect(result[0].reviewers).toHaveLength(3);
+    expect(result[0].reviewers).toContain('R1');
+    expect(result[0].reviewers).toContain('R2');
+    expect(result[0].reviewers).toContain('R3');
+  });
+
+  it('uses the longest description when merging', () => {
+    const originals = [
+      makeFinding({ title: 'Null check', description: 'Short.' }),
+      makeFinding({ title: 'Null check missing', description: 'This is a much more detailed description of the null check issue.' }),
+    ];
+    const judged: JudgedFinding[] = [
+      { title: 'Null check', severity: 'required', reasoning: 'Merged.', confidence: 'high' },
+    ];
+
+    const result = mapJudgedToFindings(originals, judged);
+    expect(result).toHaveLength(1);
+    expect(result[0].description).toBe('This is a much more detailed description of the null check issue.');
   });
 });
 
