@@ -297,16 +297,16 @@ describe('applyEscalations', () => {
 
     const result = applyEscalations(findings, patterns);
     expect(result).toHaveLength(1);
-    expect(result[0].severity).toBe('blocking');
+    expect(result[0].severity).toBe('required');
   });
 
-  it('does not escalate blocking findings', () => {
-    const findings = [makeFinding({ severity: 'blocking', title: 'Unused variable' })];
+  it('does not escalate required findings', () => {
+    const findings = [makeFinding({ severity: 'required', title: 'Unused variable' })];
     const patterns = [makePattern({ finding_title: 'unused variable', escalated: true })];
 
     const result = applyEscalations(findings, patterns);
     expect(result).toHaveLength(1);
-    expect(result[0].severity).toBe('blocking');
+    expect(result[0].severity).toBe('required');
   });
 
   it('does not escalate non-matching patterns', () => {
@@ -328,16 +328,16 @@ describe('applyEscalations', () => {
 
     const result = applyEscalations(findings, patterns);
     expect(result).toHaveLength(1);
-    expect(result[0].severity).toBe('blocking');
+    expect(result[0].severity).toBe('required');
   });
 
-  it('escalates question severity findings', () => {
-    const findings = [makeFinding({ severity: 'question', title: 'Unused variable' })];
+  it('escalates nit severity findings', () => {
+    const findings = [makeFinding({ severity: 'nit', title: 'Unused variable' })];
     const patterns = [makePattern({ finding_title: 'unused variable', escalated: true })];
 
     const result = applyEscalations(findings, patterns);
     expect(result).toHaveLength(1);
-    expect(result[0].severity).toBe('blocking');
+    expect(result[0].severity).toBe('required');
   });
 
   it('does not escalate when pattern is not escalated', () => {
