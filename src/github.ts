@@ -1,12 +1,20 @@
 import * as core from '@actions/core';
 import * as github from '@actions/github';
 
-import { Finding, ParsedDiff, ReviewResult, ReviewVerdict } from './types';
+import { Finding, FindingSeverity, ParsedDiff, ReviewResult, ReviewVerdict } from './types';
 import { isLineInDiff, findClosestDiffLine } from './diff';
 
 type Octokit = ReturnType<typeof github.getOctokit>;
 
 const BOT_MARKER = '<!-- manki-bot -->';
+
+// Covers all standard HTML elements including `base` (can inject a base URL that hijacks relative links)
+const HTML_TAGS = 'a|abbr|address|article|aside|audio|b|base|bdi|bdo|blockquote|body|br|button|canvas|caption|cite|code|col|colgroup|data|datalist|dd|del|details|dfn|dialog|div|dl|dt|em|embed|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hgroup|hr|html|i|iframe|img|input|ins|kbd|label|legend|li|link|main|map|mark|math|meta|meter|nav|noscript|object|ol|optgroup|option|output|p|param|picture|pre|progress|q|rp|rt|ruby|s|samp|script|section|select|slot|small|source|span|strong|style|sub|summary|sup|svg|table|tbody|td|template|textarea|tfoot|th|thead|time|title|tr|track|u|ul|var|video|wbr';
+// The `[^>]*` in these regexes is anchored by a literal `>`, so backtracking is
+// linear. If no `>` exists, the unclosed-tag regex below handles that case
+// separately (anchored to end-of-string). Not a ReDoS concern for our input.
+const HTML_TAG_REGEX = new RegExp(`<\\/?(${HTML_TAGS})(?:\\s[^>]*)?\\s*\\/?>`, 'gi');
+const HTML_UNCLOSED_TAG_REGEX = new RegExp(`<\\/?(${HTML_TAGS})(?:\\s[^>]*)?$`, 'gim');
 
 /**
  * Fetch the raw diff for a PR.
@@ -113,19 +121,21 @@ export async function updateProgressComment(
   result: ReviewResult,
 ): Promise<void> {
   const emoji = result.verdict === 'APPROVE' ? '✅' : result.verdict === 'REQUEST_CHANGES' ? '❌' : '💬';
+  const safeSummary = sanitizeMarkdown(result.summary);
   const findingsSummary = result.findings.length > 0
     ? `\n\n| Severity | Count |\n|---|---|\n| Blocking | ${result.findings.filter(f => f.severity === 'blocking').length} |\n| Suggestions | ${result.findings.filter(f => f.severity === 'suggestion').length} |\n| Questions | ${result.findings.filter(f => f.severity === 'question').length} |`
     : '';
 
-  const highlights = result.highlights.length > 0
-    ? `\n\n**Highlights:**\n${result.highlights.map(h => `- ${h}`).join('\n')}`
+  const safeHighlights = result.highlights.map(h => sanitizeMarkdown(h));
+  const highlights = safeHighlights.length > 0
+    ? `\n\n**Highlights:**\n${safeHighlights.map(h => `- ${h}`).join('\n')}`
     : '';
 
   await octokit.rest.issues.updateComment({
     owner,
     repo,
     comment_id: commentId,
-    body: `${BOT_MARKER}\n${emoji} **Manki** — ${result.verdict.replace('_', ' ')}\n\n${result.summary}${findingsSummary}${highlights}`,
+    body: truncateBody(`${BOT_MARKER}\n${emoji} **Manki** — ${result.verdict.replace('_', ' ')}\n\n${safeSummary}${findingsSummary}${highlights}`),
   });
 }
 
@@ -179,8 +189,30 @@ export async function postReview(
   // Validate and filter inline comments against the diff
   const validComments: Array<{path: string; line: number; side: 'RIGHT'; body: string}> = [];
   const invalidComments: string[] = [];
+  const generalFindings: string[] = [];
 
-  for (const f of result.findings.filter(f => f.file && f.line > 0)) {
+  for (const f of result.findings) {
+    if (!f.file || f.line <= 0) {
+      const safeFile = f.file ? sanitizeFilePath(f.file) : '';
+      const location = f.file ? ` — \`${safeFile}\`` : '';
+      const safeTitle = sanitizeMarkdown(f.title);
+      const fullDesc = sanitizeMarkdown(f.description);
+      const safeDesc = safeTruncate(fullDesc, 300);
+      let entry = `**[${getSeverityLabel(f.severity)}] ${safeTitle}**${location}\n  ${safeDesc}`;
+      if (f.suggestedFix) {
+        const fix = safeTruncate(f.suggestedFix, 200);
+        if (fix.includes('`') || fix.includes('\n')) {
+          // Dynamic fence: content inside code fences is literal, so no sanitization needed.
+          const fence = dynamicFence(fix);
+          entry += `\n  ${fence}\n  ${fix}\n  ${fence}`;
+        } else {
+          entry += `\n  Fix: \`${fix}\``;
+        }
+      }
+      generalFindings.push(entry);
+      continue;
+    }
+
     const commentBody = formatFindingComment(f);
 
     if (diff) {
@@ -193,20 +225,27 @@ export async function postReview(
           if (closest) {
             validComments.push({ path: f.file, line: closest, side: 'RIGHT', body: commentBody });
           } else {
-            invalidComments.push(`**${f.title}** (${f.file}:${f.line}): ${f.description}`);
+            const desc = sanitizeMarkdown(f.description);
+            const truncDesc = safeTruncate(desc, 200);
+            invalidComments.push(`**[${getSeverityLabel(f.severity)}] ${sanitizeMarkdown(f.title)}** (\`${sanitizeFilePath(f.file)}:${f.line}\`): ${truncDesc}`);
           }
         }
       } else {
-        invalidComments.push(`**${f.title}** (${f.file}:${f.line}): ${f.description}`);
+        const desc = sanitizeMarkdown(f.description);
+        const truncDesc = safeTruncate(desc, 200);
+        invalidComments.push(`**[${getSeverityLabel(f.severity)}] ${sanitizeMarkdown(f.title)}** (\`${sanitizeFilePath(f.file)}:${f.line}\`): ${truncDesc}`);
       }
     } else {
       validComments.push({ path: f.file, line: f.line, side: 'RIGHT', body: commentBody });
     }
   }
 
-  let body = `${BOT_MARKER}\n${result.summary}`;
+  let body = `${BOT_MARKER}\n${sanitizeMarkdown(result.summary)}`;
+  if (generalFindings.length > 0) {
+    body += `\n\n**General findings:**\n${generalFindings.map(c => `- ${c}`).join('\n')}`;
+  }
   if (invalidComments.length > 0) {
-    body += `\n\n**Additional findings (not on changed lines):**\n${invalidComments.map(c => `- ${c}`).join('\n')}`;
+    body += `\n\n**Findings (not on changed lines):**\n${invalidComments.map(c => `- ${c}`).join('\n')}`;
   }
 
   if (invalidComments.length > 0) {
@@ -221,7 +260,7 @@ export async function postReview(
       pull_number: prNumber,
       commit_id: commitSha,
       event,
-      body,
+      body: truncateBody(body),
       comments: validComments,
     });
 
@@ -236,7 +275,7 @@ export async function postReview(
     if (isLineError && validComments.length > 0) {
       core.warning('Inline comments rejected by GitHub (invalid lines). Posting review without inline comments.');
       const allAsBody = validComments.map(c => `- ${c.body.split('\n')[0]}`).join('\n');
-      const fallbackBody = `${body}\n\n**Inline comments could not be posted:**\n${allAsBody}`;
+      const lineErrFallbackBody = truncateBody(`${body}\n\n**Inline comments could not be posted:**\n${allAsBody}`);
 
       const { data: review } = await octokit.rest.pulls.createReview({
         owner,
@@ -244,7 +283,7 @@ export async function postReview(
         pull_number: prNumber,
         commit_id: commitSha,
         event,
-        body: fallbackBody,
+        body: lineErrFallbackBody,
         comments: [],
       });
 
@@ -265,7 +304,7 @@ export async function postReview(
       const firstLine = c.body.split('\n')[0];
       return `- ${firstLine} (\`${c.path}:${c.line}\`)`;
     }).join('\n');
-    const fallbackBody = `${body}\n\n**Findings (could not post inline):**\n${findingSummary}`;
+    const fallbackBody = truncateBody(`${body}\n\n**Findings (could not post inline):**\n${findingSummary}`);
 
     const { data: review } = await octokit.rest.pulls.createReview({
       owner,
@@ -282,6 +321,32 @@ export async function postReview(
   }
 }
 
+function dynamicFence(content: string): string {
+  const maxBt = (content.match(/`+/g) || []).reduce((max: number, s: string) => Math.max(max, s.length), 0);
+  return '`'.repeat(Math.max(3, maxBt + 1));
+}
+
+function truncateBody(text: string, maxLength: number = 60000): string {
+  if (text.length <= maxLength) return text;
+  const notice = '\n\n*(Review body truncated)*';
+  const safeMax = Math.max(0, maxLength - notice.length);
+  const cutoff = text.lastIndexOf(' ', safeMax);
+  return text.slice(0, cutoff > safeMax - 100 ? cutoff : safeMax) + notice;
+}
+
+function safeTruncate(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  let end = maxLen;
+  if (end > 0 && text.charCodeAt(end - 1) >= 0xD800 && text.charCodeAt(end - 1) <= 0xDBFF) {
+    end--;
+  }
+  return text.slice(0, end) + '...';
+}
+
+function sanitizeFilePath(file: string): string {
+  return file.replace(/`/g, "'").replace(/[\n\r]/g, ' ');
+}
+
 function mapVerdictToEvent(verdict: ReviewVerdict): 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES' {
   switch (verdict) {
     case 'APPROVE': return 'APPROVE';
@@ -290,34 +355,88 @@ function mapVerdictToEvent(verdict: ReviewVerdict): 'APPROVE' | 'COMMENT' | 'REQ
   }
 }
 
+function getSeverityLabel(severity: FindingSeverity): string {
+  if (severity === 'blocking') return 'Blocking';
+  if (severity === 'suggestion') return 'Suggestion';
+  return 'Question';
+}
+
+// Sanitizes LLM-generated text (titles, descriptions, summaries) before embedding
+// it into the GitHub comment body. Our own structural markup (<details>, <summary>,
+// collapsible sections, etc.) is added AFTER sanitization and is never passed through here.
+function sanitizeMarkdown(text: string): string {
+  // Decode common HTML entities so encoded tags like &lt;script&gt; are caught by tag stripping
+  let result = text
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)));
+  // Run comment stripping twice to handle nested comments like <!-- <!-- --> -->,
+  // then clean up any dangling close markers left behind.
+  result = result.replace(/<!--[\s\S]*?(?:-->|$)/g, '');
+  result = result.replace(/<!--[\s\S]*?(?:-->|$)/g, '');
+  result = result.replace(/-->/g, '');
+
+  // Run tag stripping twice to handle nesting like <div<div>>
+  result = result.replace(HTML_TAG_REGEX, '');
+  result = result.replace(HTML_TAG_REGEX, '');
+
+  return result
+    .replace(HTML_UNCLOSED_TAG_REGEX, '')  // Unclosed tags at end of string
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')                       // Images: keep alt text only
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')                        // Links: keep text only
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')                       // Second pass for nested brackets
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')                        // Second pass for nested brackets
+    .replace(/!\[([^\]]*)\]\[[^\]]*\]/g, '$1')                       // Reference images
+    .replace(/\[([^\]]*)\]\[[^\]]*\]/g, '$1')                        // Reference links
+    .replace(/^\[[^\]]*\]:\s+.*$/gm, '')                             // Link/image definitions
+    // Insert zero-width space after @ to prevent GitHub from resolving mentions.
+    // Lookbehind avoids matching email addresses (which have chars before @).
+    // Also handles @org/team patterns.
+    .replace(/(?<![a-zA-Z0-9.])@([a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)?)/g, '@\u200B$1');
+}
+
 function formatFindingComment(finding: Finding): string {
   const severityEmoji = finding.severity === 'blocking' ? '🚫' : finding.severity === 'suggestion' ? '💡' : '❓';
-  const severityLabel = finding.severity === 'blocking' ? 'Blocking' : finding.severity === 'suggestion' ? 'Suggestion' : 'Question';
+  const severityLabel = getSeverityLabel(finding.severity);
+  const safeTitle = sanitizeMarkdown(finding.title);
+  const safeDescription = sanitizeMarkdown(finding.description);
 
-  let comment = `${severityEmoji} **${severityLabel}**: ${finding.title}\n\n${finding.description}`;
+  let comment = `${severityEmoji} **${severityLabel}**: ${safeTitle}\n\n${safeDescription}`;
 
   if (finding.suggestedFix) {
-    comment += `\n\n<details>\n<summary>Suggested fix</summary>\n\n\`\`\`suggestion\n${finding.suggestedFix}\n\`\`\`\n</details>`;
+    // Content inside dynamically-fenced code blocks is rendered literally by GitHub,
+    // so HTML/markdown injection is not possible here — no sanitization needed.
+    const fence = dynamicFence(finding.suggestedFix);
+    comment += `\n\n<details>\n<summary>Suggested fix</summary>\n\n${fence}suggestion\n${finding.suggestedFix}\n${fence}\n</details>`;
   }
 
+  const safeFile = sanitizeFilePath(finding.file);
   comment += '\n\n<details>\n<summary>🤖 Prompt for AI Agents</summary>\n\n';
-  comment += `**File:** \`${finding.file}\`\n`;
+  comment += `**File:** \`${safeFile}\`\n`;
   comment += `**Line:** ${finding.line}\n`;
-  comment += `**Finding:** ${finding.title}\n`;
+  comment += `**Finding:** ${safeTitle}\n`;
   comment += `**Severity:** ${finding.severity}\n\n`;
-  comment += `**Description:**\n${finding.description}\n`;
+  comment += `**Description:**\n${safeDescription}\n`;
 
   if (finding.suggestedFix) {
-    comment += `\n**Suggested fix:**\n\`\`\`\n${finding.suggestedFix}\n\`\`\`\n`;
+    // Inside a dynamically-fenced code block — GitHub renders literally, safe from injection.
+    const fixFence = dynamicFence(finding.suggestedFix);
+    comment += `\n**Suggested fix:**\n${fixFence}\n${finding.suggestedFix}\n${fixFence}\n`;
   }
 
   comment += '\n> **Important:** Before applying this fix, validate the finding in the broader context of the file and surrounding code. The review agent may have missed context that makes this a false positive.\n';
   comment += '\n</details>';
 
   if (finding.reviewers.length > 0) {
-    comment += `\n\n<sub>Flagged by: ${finding.reviewers.join(', ')}</sub>`;
+    const safeReviewers = finding.reviewers.map(r => sanitizeMarkdown(r)).join(', ');
+    comment += `\n\n<sub>Flagged by: ${safeReviewers}</sub>`;
   }
 
+  // The replace strips all non-alphanumeric chars, so the title is safe for use in an HTML comment marker
   comment += `\n\n<!-- manki:${finding.severity}:${finding.title.replace(/[^a-zA-Z0-9]/g, '-')} -->`;
 
   return comment;
@@ -336,31 +455,34 @@ export function buildNitIssueBody(
 
   const checklist = nits.map(f => {
     const icon = f.severity === 'suggestion' ? '\u{1F4A1}' : '\u{2753}';
-    const safeTitle = f.title.replace(/`/g, "'");
-    const safeDescription = f.description.replace(/<!--/g, '').replace(/-->/g, '');
+    const safeTitle = sanitizeMarkdown(f.title);
+    const safeDescription = sanitizeMarkdown(f.description);
+    const safeFile = sanitizeFilePath(f.file);
 
-    let item = `- [ ] ${icon} **${safeTitle}** \u2014 \`${f.file}:${f.line}\`\n`;
+    let item = `- [ ] ${icon} **${safeTitle}** \u2014 \`${safeFile}:${f.line}\`\n`;
     item += `  \n  ${safeDescription}\n`;
 
     if (f.codeContext) {
-      const ext = f.file.split('.').pop() || '';
+      const ext = safeFile.split('.').pop() || '';
       const langMap: Record<string, string> = {
         'ts': 'typescript', 'tsx': 'typescript', 'js': 'javascript', 'jsx': 'javascript',
         'rs': 'rust', 'py': 'python', 'go': 'go', 'java': 'java',
         'css': 'css', 'html': 'html', 'yml': 'yaml', 'yaml': 'yaml',
       };
       const lang = langMap[ext] || ext;
-      item += `  \n  \`\`\`${lang}\n${f.codeContext}\n  \`\`\`\n`;
+      const fence = dynamicFence(f.codeContext);
+      item += `  \n  ${fence}${lang}\n${f.codeContext}\n  ${fence}\n`;
     }
 
     item += `  \n  <details>\n  <summary>\u{1F916} Fix prompt</summary>\n\n`;
-    item += `  **File:** \`${f.file}\`\n`;
+    item += `  **File:** \`${safeFile}\`\n`;
     item += `  **Line:** ${f.line}\n`;
     item += `  **Finding:** ${safeTitle}\n`;
     item += `  **Severity:** ${f.severity}\n\n`;
     item += `  **Description:**\n  ${safeDescription}\n`;
     if (f.suggestedFix) {
-      item += `  \n  **Suggested fix:**\n  \`\`\`\n  ${f.suggestedFix}\n  \`\`\`\n`;
+      const fixFence = dynamicFence(f.suggestedFix);
+      item += `  \n  **Suggested fix:**\n  ${fixFence}\n  ${f.suggestedFix}\n  ${fixFence}\n`;
     }
     item += `  \n  > **Important:** Before applying this fix, validate the finding in the broader context of the file and surrounding code.\n`;
     item += `  \n  </details>`;
@@ -472,4 +594,4 @@ export async function reactToReviewComment(
   }
 }
 
-export { formatFindingComment, mapVerdictToEvent, BOT_MARKER };
+export { dynamicFence, formatFindingComment, getSeverityLabel, mapVerdictToEvent, safeTruncate, sanitizeFilePath, sanitizeMarkdown, truncateBody, BOT_MARKER };

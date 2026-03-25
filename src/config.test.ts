@@ -30,6 +30,8 @@ describe('config', () => {
       expect(typeof DEFAULT_CONFIG.memory).toBe('object');
       expect(typeof DEFAULT_CONFIG.memory.enabled).toBe('boolean');
       expect(typeof DEFAULT_CONFIG.memory.repo).toBe('string');
+      expect(DEFAULT_CONFIG.review_level).toBe('auto');
+      expect(DEFAULT_CONFIG.review_thresholds).toEqual({ small: 200, medium: 1000 });
     });
 
     it('has three default reviewers with name and focus', () => {
@@ -216,6 +218,33 @@ memory:
       const config = loadConfigFromContent(yaml);
       expect(config).toEqual(DEFAULT_CONFIG);
       expect(core.warning).toHaveBeenCalledWith('Config YAML root must be an object. Using defaults.');
+    });
+
+    it('throws when review_thresholds.small >= review_thresholds.medium', () => {
+      const yaml = `
+review_thresholds:
+  small: 500
+  medium: 100
+`;
+      expect(() => loadConfigFromContent(yaml)).toThrow('Invalid config');
+    });
+
+    it('throws when review_thresholds.small equals review_thresholds.medium', () => {
+      const yaml = `
+review_thresholds:
+  small: 200
+  medium: 200
+`;
+      expect(() => loadConfigFromContent(yaml)).toThrow('Invalid config');
+    });
+
+    it('throws when partial threshold override causes small >= medium after merge', () => {
+      const yaml = `
+review_thresholds:
+  small: 1500
+`;
+      // After merge: small=1500, medium=1000 (default) => small >= medium
+      expect(() => loadConfigFromContent(yaml)).toThrow('review_thresholds.small');
     });
 
     it('ignores unknown keys during merge', () => {
