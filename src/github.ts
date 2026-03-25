@@ -748,8 +748,8 @@ export interface LinkedIssue {
   body: string;
 }
 
-const LINKED_ISSUE_REGEX = /(?:closes?|fixes?|resolves?|part\s+of)\s+#(\d+)/gi;
 const MAX_ISSUE_BODY_LENGTH = 2000;
+const MAX_LINKED_ISSUES = 5;
 
 /**
  * Parse PR body for issue references and fetch their details.
@@ -762,9 +762,9 @@ export async function fetchLinkedIssues(
 ): Promise<LinkedIssue[]> {
   if (!prBody) return [];
 
+  const regex = /(?:closes?|fixes?|resolves?|part\s+of)\s+#(\d+)/gi;
   const issueNumbers = new Set<number>();
-  let match: RegExpExecArray | null;
-  while ((match = LINKED_ISSUE_REGEX.exec(prBody)) !== null) {
+  for (const match of prBody.matchAll(regex)) {
     issueNumbers.add(parseInt(match[1], 10));
   }
 
@@ -772,12 +772,14 @@ export async function fetchLinkedIssues(
 
   const results: LinkedIssue[] = [];
   for (const issueNumber of issueNumbers) {
+    if (results.length >= MAX_LINKED_ISSUES) break;
     try {
       const { data } = await octokit.rest.issues.get({ owner, repo, issue_number: issueNumber });
-      const body = (data.body || '').length > MAX_ISSUE_BODY_LENGTH
-        ? (data.body || '').slice(0, MAX_ISSUE_BODY_LENGTH) + '\n... (truncated)'
-        : (data.body || '');
-      results.push({ number: data.number, title: data.title, body });
+      const rawBody = data.body || '';
+      const body = rawBody.length > MAX_ISSUE_BODY_LENGTH
+        ? sanitizeMarkdown(rawBody.slice(0, MAX_ISSUE_BODY_LENGTH) + '\n... (truncated)')
+        : sanitizeMarkdown(rawBody);
+      results.push({ number: data.number, title: sanitizeMarkdown(data.title), body });
     } catch {
       core.debug(`Could not fetch linked issue #${issueNumber}`);
     }

@@ -328,7 +328,7 @@ export function buildReviewerUserMessage(
   }
 
   if (linkedIssues && linkedIssues.length > 0) {
-    message += `## Linked Issues\n\n`;
+    message += `## Linked Issues (user-provided context)\n\n`;
     for (const issue of linkedIssues) {
       message += `### Issue #${issue.number}: ${issue.title}\n\n`;
       if (issue.body) {

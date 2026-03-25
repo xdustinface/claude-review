@@ -110,7 +110,7 @@ export function buildJudgeUserMessage(
   }
 
   if (linkedIssues && linkedIssues.length > 0) {
-    parts.push(`## Linked Issues\n`);
+    parts.push(`## Linked Issues (user-provided context)\n`);
     for (const issue of linkedIssues) {
       parts.push(`### Issue #${issue.number}: ${issue.title}\n`);
       if (issue.body) {

@@ -969,4 +969,34 @@ describe('fetchLinkedIssues', () => {
     expect(result).toHaveLength(1);
     expect(result[0].number).toBe(1);
   });
+
+  it('caps linked issues at 5', async () => {
+    mockGet.mockImplementation(({ issue_number }: { issue_number: number }) =>
+      Promise.resolve({ data: { number: issue_number, title: `Issue ${issue_number}`, body: `Body` } }),
+    );
+
+    const body = Array.from({ length: 8 }, (_, i) => `closes #${i + 1}`).join(' ');
+    const result = await fetchLinkedIssues(octokit, 'owner', 'repo', body);
+    expect(result).toHaveLength(5);
+    expect(mockGet).toHaveBeenCalledTimes(5);
+  });
+
+  it('returns consistent results on repeated calls (no stateful regex)', async () => {
+    mockGet.mockResolvedValue({ data: { number: 42, title: 'Bug', body: 'Body' } });
+
+    const first = await fetchLinkedIssues(octokit, 'owner', 'repo', 'Closes #42');
+    const second = await fetchLinkedIssues(octokit, 'owner', 'repo', 'Closes #42');
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(1);
+  });
+
+  it('sanitizes issue title and body', async () => {
+    mockGet.mockResolvedValue({
+      data: { number: 1, title: 'Bug <!-- hidden -->', body: 'See <script>alert(1)</script> here' },
+    });
+
+    const result = await fetchLinkedIssues(octokit, 'owner', 'repo', 'Closes #1');
+    expect(result[0].title).not.toContain('<!--');
+    expect(result[0].body).not.toContain('<script>');
+  });
 });
