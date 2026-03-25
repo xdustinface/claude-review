@@ -459,7 +459,7 @@ function formatFindingComment(finding: Finding): string {
 }
 
 /**
- * Build the markdown body for a nit issue from non-blocking findings.
+ * Build the markdown body for a nit issue from non-required findings.
  * Pure function — no API calls — for testability.
  */
 export function buildNitIssueBody(
@@ -520,7 +520,7 @@ ${checklist}
 }
 
 /**
- * Create a GitHub issue from non-blocking review findings.
+ * Create a GitHub issue from non-required review findings.
  * Returns the issue number, or null if no nits or issue already exists.
  */
 export async function createNitIssue(
