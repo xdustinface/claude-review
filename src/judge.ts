@@ -70,6 +70,15 @@ For each finding, evaluate:
 - If a reviewer flags something that looks intentional or is a matter of preference, mark it \`ignore\`.
 - If a finding is correct but overstated in severity, downgrade it.
 
+## Duplicate Detection
+
+Multiple specialist reviewers may flag the same issue independently. When you see findings that describe the same underlying problem (even with different wording, slightly different line numbers, or different titles):
+
+- Return only ONE entry for the merged finding
+- Use the best/clearest title from the duplicates
+- Use the most detailed description
+- In your reasoning, note which findings you merged (e.g., "Merged findings 1 and 4 — same issue")
+
 ## Output Format
 
 Respond with ONLY a JSON array (no markdown fences, no explanation). Each element:
@@ -85,7 +94,7 @@ Respond with ONLY a JSON array (no markdown fences, no explanation). Each elemen
 ]
 \`\`\`
 
-Return one element per finding, in the same order as presented.`;
+The output array may be shorter than the input when duplicates are merged. Preserve the order of first appearance.`;
 
   if (config.instructions) {
     prompt += `\n\n## Project Instructions\n\n${config.instructions}`;
@@ -304,19 +313,23 @@ export async function runJudgeAgent(
   return mapJudgedToFindings(findings, judged);
 }
 
-function mapJudgedToFindings(original: Finding[], judged: JudgedFinding[]): Finding[] {
+export function mapJudgedToFindings(original: Finding[], judged: JudgedFinding[]): Finding[] {
+  // When judge returns fewer results (due to merging duplicates), use fuzzy matching only
+  if (judged.length < original.length) {
+    return mapMergedFindings(original, judged);
+  }
+
+  // 1:1 mapping: match by position, fall back to fuzzy title match
   const result: Finding[] = [];
 
   for (let i = 0; i < original.length; i++) {
     const finding = { ...original[i] };
 
-    // Match by position first (judge returns findings in same order)
     let match: JudgedFinding | undefined;
     if (i < judged.length) {
       match = judged[i];
     }
 
-    // Fall back to fuzzy title match if position doesn't seem right
     if (match && !titlesRelated(finding.title, match.title)) {
       const titleMatch = judged.find(j => titlesRelated(finding.title, j.title));
       if (titleMatch) {
@@ -331,6 +344,46 @@ function mapJudgedToFindings(original: Finding[], judged: JudgedFinding[]): Find
     }
 
     result.push(finding);
+  }
+
+  return result;
+}
+
+function mapMergedFindings(original: Finding[], judged: JudgedFinding[]): Finding[] {
+  const result: Finding[] = [];
+
+  for (const j of judged) {
+    // Find all original findings that match this judge result
+    const matches = original.filter(o => titlesRelated(o.title, j.title));
+
+    if (matches.length === 0) {
+      // No match found — skip this judge result (should not happen in practice)
+      continue;
+    }
+
+    // Use the first match as the base finding
+    const merged: Finding = { ...matches[0] };
+    merged.severity = j.severity;
+    merged.judgeNotes = j.reasoning;
+    merged.judgeConfidence = j.confidence;
+
+    // Combine reviewers from all matched originals
+    const allReviewers = new Set<string>();
+    for (const m of matches) {
+      for (const r of m.reviewers) {
+        allReviewers.add(r);
+      }
+    }
+    merged.reviewers = [...allReviewers];
+
+    // Use the longest description among matches
+    for (const m of matches) {
+      if (m.description.length > merged.description.length) {
+        merged.description = m.description;
+      }
+    }
+
+    result.push(merged);
   }
 
   return result;
