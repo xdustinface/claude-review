@@ -29,6 +29,8 @@ export const DEFAULT_CONFIG: ReviewConfig = {
   max_diff_lines: 10000,
   reviewers: DEFAULT_REVIEWERS,
   instructions: '',
+  review_level: 'auto',
+  review_thresholds: { small: 200, medium: 1000 },
   memory: {
     enabled: false,
     repo: '',
@@ -46,6 +48,8 @@ const KNOWN_KEYS = new Set([
   'max_diff_lines',
   'reviewers',
   'instructions',
+  'review_level',
+  'review_thresholds',
   'memory',
   'models',
   'nit_handling',
@@ -104,6 +108,33 @@ function validateConfig(config: Record<string, unknown>): ConfigValidationResult
   if ('exclude_paths' in config) {
     if (!Array.isArray(config.exclude_paths)) {
       errors.push('`exclude_paths` must be an array of strings');
+    }
+  }
+
+  if ('review_level' in config) {
+    const valid = ['auto', 'small', 'medium', 'large'];
+    if (typeof config.review_level !== 'string' || !valid.includes(config.review_level)) {
+      errors.push('`review_level` must be one of: auto, small, medium, large');
+    }
+  }
+
+  if ('review_thresholds' in config) {
+    const thresholds = config.review_thresholds as Record<string, unknown>;
+    if (!thresholds || typeof thresholds !== 'object' || Array.isArray(thresholds)) {
+      errors.push('`review_thresholds` must be an object');
+    } else {
+      if ('small' in thresholds && (typeof thresholds.small !== 'number' || thresholds.small <= 0)) {
+        errors.push('`review_thresholds.small` must be a positive number');
+      }
+      if ('medium' in thresholds && (typeof thresholds.medium !== 'number' || thresholds.medium <= 0)) {
+        errors.push('`review_thresholds.medium` must be a positive number');
+      }
+      if (
+        typeof thresholds.small === 'number' && typeof thresholds.medium === 'number' &&
+        thresholds.small >= thresholds.medium
+      ) {
+        errors.push('`review_thresholds.small` must be less than `review_thresholds.medium`');
+      }
     }
   }
 
@@ -178,6 +209,8 @@ function deepMerge(defaults: ReviewConfig, overrides: Record<string, unknown>): 
       result.memory = { ...defaults.memory, ...(value as Record<string, unknown>) } as ReviewConfig['memory'];
     } else if (key === 'models' && typeof value === 'object' && value !== null && !Array.isArray(value)) {
       result.models = { ...defaults.models, ...(value as Record<string, unknown>) } as ReviewConfig['models'];
+    } else if (key === 'review_thresholds' && typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      result.review_thresholds = { ...defaults.review_thresholds, ...(value as Record<string, unknown>) } as ReviewConfig['review_thresholds'];
     } else {
       (result as Record<string, unknown>)[key] = value;
     }
@@ -219,7 +252,13 @@ export function loadConfigFromContent(content: string): ReviewConfig {
     throw new Error(`Invalid config: ${validation.errors.join('; ')}`);
   }
 
-  return deepMerge(DEFAULT_CONFIG, parsed);
+  const merged = deepMerge(DEFAULT_CONFIG, parsed);
+
+  if (merged.review_thresholds.small >= merged.review_thresholds.medium) {
+    throw new Error('Invalid config: `review_thresholds.small` must be less than `review_thresholds.medium`');
+  }
+
+  return merged;
 }
 
 export function loadConfigFromFile(filePath: string): ReviewConfig {

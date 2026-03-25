@@ -28,6 +28,26 @@ export interface ReviewerAgent {
   focus: string;
 }
 
+export type ReviewLevel = 'auto' | 'small' | 'medium' | 'large';
+
+export interface ReviewThresholds {
+  small: number;
+  medium: number;
+}
+
+export interface AgentVote {
+  agentName: string;
+  findingIndex: number;
+  vote: 'agree' | 'disagree' | 'escalate';
+  reason: string;
+}
+
+export interface TeamRoster {
+  level: 'small' | 'medium' | 'large';  // resolved, never 'auto'
+  agents: ReviewerAgent[];
+  lineCount: number;
+}
+
 export interface ReviewConfig {
   model: string;
   auto_review: boolean;
@@ -38,6 +58,8 @@ export interface ReviewConfig {
   max_diff_lines: number;
   reviewers: ReviewerAgent[];
   instructions: string;
+  review_level: ReviewLevel;
+  review_thresholds: ReviewThresholds;
   memory: {
     enabled: boolean;
     repo: string;
