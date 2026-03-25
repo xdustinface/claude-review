@@ -214,6 +214,22 @@ describe('buildReviewerSystemPrompt', () => {
     expect(prompt).toContain('review memory');
     expect(prompt).toContain('suppressed');
   });
+
+  it('includes severity examples for each level', () => {
+    const prompt = buildReviewerSystemPrompt(reviewer, makeConfig());
+    // required examples
+    expect(prompt).toContain('SQL injection');
+    expect(prompt).toContain('Null/undefined dereference');
+    expect(prompt).toContain('Off-by-one');
+    // suggestion examples
+    expect(prompt).toContain('logging "failed"');
+    expect(prompt).toContain('const');
+    expect(prompt).toContain('reusable helper');
+    // nit examples
+    expect(prompt).toContain('connectionCount');
+    expect(prompt).toContain('import ordering');
+    expect(prompt).toContain('JSDoc');
+  });
 });
 
 describe('buildReviewerUserMessage', () => {

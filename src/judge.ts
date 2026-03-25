@@ -37,9 +37,21 @@ export function buildJudgeSystemPrompt(config: ReviewConfig): string {
 ## Severity Scale
 
 - **required**: Bugs, security vulnerabilities, data corruption, crashes, incorrect behavior. These MUST be fixed before merge. Be conservative — only real bugs and security issues qualify.
+  - SQL injection via unsanitized user input in a database query
+  - Null/undefined dereference in an error handling path that will crash at runtime
+  - Off-by-one in array bounds causing data corruption or out-of-bounds access
 - **suggestion**: Code clarity, readability, minor optimizations, design improvements. Worth doing but not blocking.
+  - Error message lacks context (e.g., logging "failed" without the error reason)
+  - Variable could be \`const\` instead of \`let\` since it is never reassigned
+  - Function could be simplified by extracting a reusable helper
 - **nit**: Typos, naming nitpicks, minor style issues. Entirely optional.
+  - Variable name could be more descriptive (e.g., \`x\` → \`connectionCount\`)
+  - Inconsistent import ordering compared to rest of file
+  - Missing JSDoc on an exported function
 - **ignore**: False positives, intentional patterns, reviewer misunderstandings. Will be dropped.
+  - Intentional TODO with a tracking issue number
+  - Known workaround documented in comments
+  - Style preference that does not affect correctness (e.g., ternary vs if/else)
 
 ## Evaluation Criteria
 

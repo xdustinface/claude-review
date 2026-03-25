@@ -146,7 +146,7 @@ export async function runReview(
     )
   );
 
-  let allFindings: Finding[] = [];
+  const allFindings: Finding[] = [];
   for (let i = 0; i < agentResults.length; i++) {
     const result = agentResults[i];
     if (result.status === 'fulfilled') {
@@ -167,22 +167,23 @@ export async function runReview(
     };
   }
 
+  let findingsForJudge = allFindings;
   if (memory?.suppressions && memory.suppressions.length > 0) {
     const { kept, suppressed } = applySuppressions(allFindings, memory.suppressions);
     if (suppressed.length > 0) {
       core.info(`Suppressed ${suppressed.length} findings before judge evaluation`);
     }
-    allFindings = kept;
+    findingsForJudge = kept;
   }
 
   let finalFindings: Finding[];
-  if (allFindings.length === 0) {
+  if (findingsForJudge.length === 0) {
     finalFindings = [];
   } else {
     try {
-      core.info(`Running judge on ${allFindings.length} findings...`);
+      core.info(`Running judge on ${findingsForJudge.length} findings...`);
       const judgeInput: JudgeInput = {
-        findings: allFindings,
+        findings: findingsForJudge,
         diff,
         rawDiff,
         memory: memory ?? undefined,
@@ -268,8 +269,17 @@ Respond with ONLY a JSON array (no markdown fences, no explanation). Each findin
 ## Severity Guidelines
 
 - **required**: Bugs, security vulnerabilities, data corruption risks, crashes, incorrect behavior. These MUST be fixed before merge.
+  - SQL injection via unsanitized user input in a database query
+  - Null/undefined dereference in an error handling path that will crash at runtime
+  - Off-by-one in array bounds causing data corruption or out-of-bounds access
 - **suggestion**: Style improvements, minor optimizations, readability enhancements. Nice to have but not required.
+  - Error message lacks context (e.g., logging "failed" without the error reason)
+  - Variable could be \`const\` instead of \`let\` since it is never reassigned
+  - Function could be simplified by extracting a reusable helper
 - **nit**: Trivial nitpicks — naming, formatting, minor style preferences. Collected separately for triage.
+  - Variable name could be more descriptive (e.g., \`x\` → \`connectionCount\`)
+  - Inconsistent import ordering compared to rest of file
+  - Missing JSDoc on an exported function
 - **ignore**: Not a real issue — false positive or intentional pattern. Use this to explicitly dismiss a potential finding.
 
 ## Rules
