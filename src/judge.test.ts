@@ -5,6 +5,7 @@ import {
   parseJudgeResponse,
   filterMemoryForFindings,
   mapJudgedToFindings,
+  deduplicateFindings,
   runJudgeAgent,
   JudgeInput,
   JudgedFinding,
@@ -656,5 +657,66 @@ describe('buildJudgeUserMessage with linked issues', () => {
     const msg = buildJudgeUserMessage(findings, new Map(), '');
 
     expect(msg).not.toContain('## Linked Issues');
+  });
+});
+
+describe('deduplicateFindings', () => {
+  it('removes findings with identical title and file', () => {
+    const findings = [
+      makeFinding({ title: 'Null check', file: 'src/a.ts', line: 10, reviewers: ['R1'] }),
+      makeFinding({ title: 'Null check', file: 'src/a.ts', line: 20, reviewers: ['R2'] }),
+    ];
+
+    const result = deduplicateFindings(findings);
+    expect(result).toHaveLength(1);
+    expect(result[0].reviewers).toEqual(['R1']);
+  });
+
+  it('keeps findings with same title but different files', () => {
+    const findings = [
+      makeFinding({ title: 'Null check', file: 'src/a.ts' }),
+      makeFinding({ title: 'Null check', file: 'src/b.ts' }),
+    ];
+
+    const result = deduplicateFindings(findings);
+    expect(result).toHaveLength(2);
+  });
+
+  it('keeps findings with same file but different titles', () => {
+    const findings = [
+      makeFinding({ title: 'Null check', file: 'src/a.ts' }),
+      makeFinding({ title: 'Unused import', file: 'src/a.ts' }),
+    ];
+
+    const result = deduplicateFindings(findings);
+    expect(result).toHaveLength(2);
+  });
+
+  it('preserves the first occurrence and drops subsequent duplicates', () => {
+    const findings = [
+      makeFinding({ title: 'Bug', file: 'x.ts', severity: 'required', description: 'First' }),
+      makeFinding({ title: 'Bug', file: 'x.ts', severity: 'nit', description: 'Second' }),
+      makeFinding({ title: 'Bug', file: 'x.ts', severity: 'suggestion', description: 'Third' }),
+    ];
+
+    const result = deduplicateFindings(findings);
+    expect(result).toHaveLength(1);
+    expect(result[0].severity).toBe('required');
+    expect(result[0].description).toBe('First');
+  });
+
+  it('returns empty array for empty input', () => {
+    expect(deduplicateFindings([])).toEqual([]);
+  });
+
+  it('returns all findings when there are no duplicates', () => {
+    const findings = [
+      makeFinding({ title: 'A', file: '1.ts' }),
+      makeFinding({ title: 'B', file: '2.ts' }),
+      makeFinding({ title: 'C', file: '3.ts' }),
+    ];
+
+    const result = deduplicateFindings(findings);
+    expect(result).toHaveLength(3);
   });
 });
