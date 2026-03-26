@@ -310,7 +310,8 @@ export async function runJudgeAgent(
     return findings;
   }
 
-  return mapJudgedToFindings(findings, judged);
+  const mapped = mapJudgedToFindings(findings, judged);
+  return deduplicateFindings(mapped);
 }
 
 export function mapJudgedToFindings(original: Finding[], judged: JudgedFinding[]): Finding[] {
@@ -412,6 +413,16 @@ function titlesRelated(a: string, b: string): boolean {
 
   const minSize = Math.min(aWords.size, bWords.size);
   return overlap >= minSize * 0.5;
+}
+
+export function deduplicateFindings(findings: Finding[]): Finding[] {
+  const seen = new Set<string>();
+  return findings.filter(f => {
+    const key = `${f.title}::${f.file}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function findingKey(f: Finding): string {
