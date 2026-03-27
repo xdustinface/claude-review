@@ -26,7 +26,7 @@ describe('config', () => {
       expect(typeof DEFAULT_CONFIG.max_diff_lines).toBe('number');
       expect(DEFAULT_CONFIG.max_diff_lines).toBeGreaterThan(0);
       expect(Array.isArray(DEFAULT_CONFIG.reviewers)).toBe(true);
-      expect(DEFAULT_CONFIG.reviewers.length).toBe(3);
+      expect(DEFAULT_CONFIG.reviewers.length).toBe(0);
       expect(typeof DEFAULT_CONFIG.instructions).toBe('string');
       expect(typeof DEFAULT_CONFIG.memory).toBe('object');
       expect(typeof DEFAULT_CONFIG.memory.enabled).toBe('boolean');
@@ -42,13 +42,8 @@ describe('config', () => {
       expect(DEFAULT_CONFIG.models?.judge).toBe('claude-opus-4-6');
     });
 
-    it('has three default reviewers with name and focus', () => {
-      for (const reviewer of DEFAULT_CONFIG.reviewers) {
-        expect(typeof reviewer.name).toBe('string');
-        expect(reviewer.name.length).toBeGreaterThan(0);
-        expect(typeof reviewer.focus).toBe('string');
-        expect(reviewer.focus.length).toBeGreaterThan(0);
-      }
+    it('has no default custom reviewers', () => {
+      expect(DEFAULT_CONFIG.reviewers).toEqual([]);
     });
   });
 
