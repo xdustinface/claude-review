@@ -4,11 +4,72 @@ import { createAppAuth } from '@octokit/auth-app';
 
 type Octokit = ReturnType<typeof github.getOctokit>;
 
+export interface TokenResult {
+  token: string;
+  identity: 'app' | 'actions';
+}
+
+/**
+ * Auto-detect manki-labs GitHub App installation and fetch an app token
+ * from the token service. Falls back to the provided github_token on any failure.
+ */
+export async function resolveGitHubToken(
+  githubToken: string,
+  tokenUrl: string,
+  owner: string,
+  repo: string,
+): Promise<TokenResult> {
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/installation`,
+      {
+        headers: {
+          Authorization: `token ${githubToken}`,
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'manki',
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+      },
+    );
+
+    if (!response.ok) {
+      core.info('Manki app not installed — using github-actions[bot] identity');
+      return { token: githubToken, identity: 'actions' };
+    }
+
+    const installation = await response.json() as { id: number; app_slug: string };
+
+    if (installation.app_slug !== 'manki-labs') {
+      core.info('Manki app not installed — using github-actions[bot] identity');
+      return { token: githubToken, identity: 'actions' };
+    }
+
+    core.info(`Found manki-labs installation: ${installation.id}`);
+
+    const tokenResponse = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ installation_id: installation.id }),
+    });
+
+    if (!tokenResponse.ok) {
+      core.warning(`Token service error (${tokenResponse.status}) — falling back to github-actions[bot]`);
+      return { token: githubToken, identity: 'actions' };
+    }
+
+    const tokenData = await tokenResponse.json() as { token: string; expires_at: string };
+    core.info(`Using manki-labs[bot] identity (token expires ${tokenData.expires_at})`);
+    core.setSecret(tokenData.token);
+    return { token: tokenData.token, identity: 'app' };
+  } catch (error) {
+    core.warning(`App token resolution failed: ${error} — falling back to github-actions[bot]`);
+    return { token: githubToken, identity: 'actions' };
+  }
+}
+
 /**
  * Create an authenticated Octokit client.
- * If GitHub App credentials are provided, generates an installation token
- * so reviews appear under the app's identity.
- * Otherwise falls back to the provided github_token.
+ * Priority: explicit App credentials > auto-detect manki-labs app > github_token.
  */
 export async function createAuthenticatedOctokit(): Promise<Octokit> {
   const appId = core.getInput('github_app_id');
@@ -25,8 +86,11 @@ export async function createAuthenticatedOctokit(): Promise<Octokit> {
     throw new Error('No authentication configured. Provide either github_token or both github_app_id and github_app_private_key.');
   }
 
-  core.info('Using GITHUB_TOKEN (reviews will appear as github-actions[bot])');
-  return github.getOctokit(githubToken);
+  const tokenUrl = core.getInput('manki_token_url') || 'https://manki.dustinface.me/token';
+  const { owner, repo: repoName } = github.context.repo;
+  const { token } = await resolveGitHubToken(githubToken, tokenUrl, owner, repoName);
+
+  return github.getOctokit(token);
 }
 
 /**
