@@ -242,7 +242,7 @@ export async function updateProgressComment(
       parts.push('**Judge decisions:**');
       for (const d of metadata.judgeDecisions) {
         const icon = d.kept ? '\u2713 Kept' : '\u2717 Dropped';
-        parts.push(`- ${icon}: "${d.title}" (${d.severity}, ${d.confidence} confidence) — "${d.reasoning}"`);
+        parts.push(`- ${icon}: "${sanitizeMarkdown(d.title)}" (${d.severity}, ${d.confidence} confidence) — "${sanitizeMarkdown(d.reasoning)}"`);
       }
       parts.push('');
     }
