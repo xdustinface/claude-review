@@ -20,59 +20,19 @@ export async function resolveGitHubToken(
   repo: string,
 ): Promise<TokenResult> {
   try {
-    const ghController = new AbortController();
-    const ghTimeout = setTimeout(() => ghController.abort(), 10000);
-    let response: Response;
-    try {
-      response = await fetch(
-        `https://api.github.com/repos/${owner}/${repo}/installation`,
-        {
-          headers: {
-            Authorization: `token ${githubToken}`,
-            Accept: 'application/vnd.github+json',
-            'User-Agent': 'manki',
-            'X-GitHub-Api-Version': '2022-11-28',
-          },
-          signal: ghController.signal,
-        },
-      );
-    } finally {
-      clearTimeout(ghTimeout);
-    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
 
-    if (!response.ok) {
-      core.info('Manki app not installed — using github-actions[bot] identity');
-      return { token: githubToken, identity: 'actions' };
-    }
-
-    const installation = await response.json() as { id: number; app_slug: string };
-
-    if (installation.app_slug !== 'manki-labs') {
-      core.info('Manki app not installed — using github-actions[bot] identity');
-      return { token: githubToken, identity: 'actions' };
-    }
-
-    core.info(`Found manki-labs installation: ${installation.id}`);
-
-    // The token service has no authentication. This is a known limitation —
-    // installation IDs are public and the generated tokens are short-lived with
-    // limited permissions, but a shared-secret auth header would add defense in depth.
-    const tokenController = new AbortController();
-    const tokenTimeout = setTimeout(() => tokenController.abort(), 10000);
-    let tokenResponse: Response;
-    try {
-      tokenResponse = await fetch(tokenUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ installation_id: installation.id }),
-        signal: tokenController.signal,
-      });
-    } finally {
-      clearTimeout(tokenTimeout);
-    }
+    const tokenResponse = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ owner, repo }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
 
     if (!tokenResponse.ok) {
-      core.warning(`Token service error (${tokenResponse.status}) — falling back to github-actions[bot]`);
+      core.info(`Manki app not available for ${owner}/${repo} — using github-actions[bot] identity`);
       return { token: githubToken, identity: 'actions' };
     }
 
@@ -87,7 +47,7 @@ export async function resolveGitHubToken(
     core.setSecret(tokenData.token);
     return { token: tokenData.token, identity: 'app' };
   } catch (error) {
-    core.warning(`App token resolution failed: ${error} — falling back to github-actions[bot]`);
+    core.info(`App token resolution failed: ${error} — using github-actions[bot] identity`);
     return { token: githubToken, identity: 'actions' };
   }
 }
