@@ -54,7 +54,6 @@ const TOKEN_URL = 'https://manki.dustinface.me/token';
 const OWNER = 'test-owner';
 const REPO = 'test-repo';
 const APP_TOKEN = 'ghs_app_token_456';
-const INSTALLATION_ID = 42;
 
 function mockFetch(impl: (url: string, opts?: RequestInit) => Promise<Response>) {
   global.fetch = jest.fn(impl) as jest.Mock;
@@ -65,14 +64,8 @@ describe('resolveGitHubToken', () => {
     jest.restoreAllMocks();
   });
 
-  it('returns app token when manki-labs is installed', async () => {
-    mockFetch(async (url: string) => {
-      if (url.includes('/installation')) {
-        return new Response(
-          JSON.stringify({ id: INSTALLATION_ID, app_slug: 'manki-labs' }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        );
-      }
+  it('returns app token when token service succeeds', async () => {
+    mockFetch(async () => {
       return new Response(
         JSON.stringify({ token: APP_TOKEN, expires_at: '2026-03-28T12:00:00Z' }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
@@ -85,12 +78,12 @@ describe('resolveGitHubToken', () => {
     expect(core.setSecret).toHaveBeenCalledWith(APP_TOKEN);
     expect(core.info).toHaveBeenCalledWith(expect.stringContaining('manki-labs[bot]'));
 
-    const tokenCall = (global.fetch as jest.Mock).mock.calls[1];
-    expect(tokenCall[0]).toBe(TOKEN_URL);
-    expect(JSON.parse(tokenCall[1].body)).toEqual({ installation_id: INSTALLATION_ID });
+    const call = (global.fetch as jest.Mock).mock.calls[0];
+    expect(call[0]).toBe(TOKEN_URL);
+    expect(JSON.parse(call[1].body)).toEqual({ owner: OWNER, repo: REPO });
   });
 
-  it('falls back when app is not installed (404)', async () => {
+  it('falls back when token service returns not found', async () => {
     mockFetch(async () => {
       return new Response('Not Found', { status: 404 });
     });
@@ -98,48 +91,22 @@ describe('resolveGitHubToken', () => {
     const result = await resolveGitHubToken(GITHUB_TOKEN, TOKEN_URL, OWNER, REPO);
 
     expect(result).toEqual<TokenResult>({ token: GITHUB_TOKEN, identity: 'actions' });
-    expect(core.info).toHaveBeenCalledWith(expect.stringContaining('not installed'));
-  });
-
-  it('falls back when a different app is installed', async () => {
-    mockFetch(async () => {
-      return new Response(
-        JSON.stringify({ id: 99, app_slug: 'some-other-app' }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
-    });
-
-    const result = await resolveGitHubToken(GITHUB_TOKEN, TOKEN_URL, OWNER, REPO);
-
-    expect(result).toEqual<TokenResult>({ token: GITHUB_TOKEN, identity: 'actions' });
-    expect(core.info).toHaveBeenCalledWith(expect.stringContaining('not installed'));
+    expect(core.info).toHaveBeenCalledWith(expect.stringContaining('not available'));
   });
 
   it('falls back when token service returns an error', async () => {
-    mockFetch(async (url: string) => {
-      if (url.includes('/installation')) {
-        return new Response(
-          JSON.stringify({ id: INSTALLATION_ID, app_slug: 'manki-labs' }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        );
-      }
+    mockFetch(async () => {
       return new Response('Internal Server Error', { status: 500 });
     });
 
     const result = await resolveGitHubToken(GITHUB_TOKEN, TOKEN_URL, OWNER, REPO);
 
     expect(result).toEqual<TokenResult>({ token: GITHUB_TOKEN, identity: 'actions' });
-    expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('Token service error (500)'));
+    expect(core.info).toHaveBeenCalledWith(expect.stringContaining('not available'));
   });
 
   it('falls back when token service returns invalid response (empty token)', async () => {
-    mockFetch(async (url: string) => {
-      if (url.includes('/installation')) {
-        return new Response(
-          JSON.stringify({ id: INSTALLATION_ID, app_slug: 'manki-labs' }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        );
-      }
+    mockFetch(async () => {
       return new Response(
         JSON.stringify({ token: '', expires_at: '2026-03-28T12:00:00Z' }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
@@ -153,13 +120,7 @@ describe('resolveGitHubToken', () => {
   });
 
   it('falls back when token service returns invalid response (missing token)', async () => {
-    mockFetch(async (url: string) => {
-      if (url.includes('/installation')) {
-        return new Response(
-          JSON.stringify({ id: INSTALLATION_ID, app_slug: 'manki-labs' }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        );
-      }
+    mockFetch(async () => {
       return new Response(
         JSON.stringify({ expires_at: '2026-03-28T12:00:00Z' }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
@@ -180,6 +141,6 @@ describe('resolveGitHubToken', () => {
     const result = await resolveGitHubToken(GITHUB_TOKEN, TOKEN_URL, OWNER, REPO);
 
     expect(result).toEqual<TokenResult>({ token: GITHUB_TOKEN, identity: 'actions' });
-    expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('App token resolution failed'));
+    expect(core.info).toHaveBeenCalledWith(expect.stringContaining('App token resolution failed'));
   });
 });
