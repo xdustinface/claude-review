@@ -52,7 +52,8 @@ async function run(): Promise<void> {
     return;
   }
 
-  // Event filtering — exit immediately for irrelevant events
+  // Event filtering — exit immediately for irrelevant events.
+  // Tested via integration (live PR reviews) since it depends on GitHub Actions context.
   if (eventName === 'pull_request') {
     if (action !== 'opened' && action !== 'synchronize') {
       core.info(`Ignoring pull_request action: ${action}`);
@@ -135,7 +136,6 @@ async function isReviewInProgress(
     const { data: runs } = await octokit.rest.actions.listWorkflowRunsForRepo({
       owner,
       repo,
-      event: 'pull_request',
       status: 'in_progress',
       per_page: 10,
     });
