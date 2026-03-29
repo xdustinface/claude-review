@@ -119,8 +119,8 @@ async function run(): Promise<void> {
 }
 
 /**
- * Check if a Manki review is already in progress for this PR by looking
- * for a progress comment that hasn't been finalized yet.
+ * Check if another workflow run is already reviewing this PR by querying
+ * the GitHub Actions workflow runs API for in-progress runs.
  */
 async function isReviewInProgress(
   octokit: Octokit,
@@ -128,17 +128,28 @@ async function isReviewInProgress(
   repo: string,
   prNumber: number,
 ): Promise<boolean> {
-  const { data: comments } = await octokit.rest.issues.listComments({
-    owner,
-    repo,
-    issue_number: prNumber,
-  });
+  const currentRunId = Number(process.env.GITHUB_RUN_ID || '0');
 
-  const botComments = comments.filter(c => c.body?.includes(BOT_MARKER));
-  if (botComments.length === 0) return false;
+  try {
+    const { data: runs } = await octokit.rest.actions.listWorkflowRunsForRepo({
+      owner,
+      repo,
+      event: 'pull_request',
+      status: 'in_progress',
+      per_page: 10,
+    });
 
-  const latest = botComments[botComments.length - 1];
-  return latest.body?.includes('Review in progress') ?? false;
+    // Check if there's another in-progress run for the same PR (different from us)
+    const otherRun = runs.workflow_runs.find(r =>
+      r.id !== currentRunId &&
+      r.pull_requests?.some(pr => pr.number === prNumber),
+    );
+
+    return !!otherRun;
+  } catch {
+    // If we can't check, don't block
+    return false;
+  }
 }
 
 async function handlePullRequest(): Promise<void> {
