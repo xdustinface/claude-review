@@ -39,59 +39,89 @@ async function getOctokit(): Promise<Octokit> {
 }
 
 async function run(): Promise<void> {
-  try {
-    const eventName = github.context.eventName;
-    const action = github.context.payload.action;
+  const eventName = github.context.eventName;
+  const action = github.context.payload.action;
 
-    core.info(`Event: ${eventName}, Action: ${action}`);
+  core.info(`Event: ${eventName}, Action: ${action}`);
 
-    switch (eventName) {
-      case 'pull_request':
-        if (action === 'opened' || action === 'synchronize') {
-          await handlePullRequest();
-        }
-        break;
+  // Prevent self-triggering — skip events caused by our own bot
+  const actor = github.context.payload.sender?.login ?? '';
+  if (actor === 'manki-labs[bot]' || actor === 'github-actions[bot]') {
+    core.info(`Ignoring event from bot: ${actor}`);
+    return;
+  }
 
-      case 'issue_comment':
-        if (action === 'created') {
-          const commentBody = github.context.payload.comment?.body ?? '';
-          if (isReviewRequest(commentBody) && github.context.payload.issue?.pull_request) {
-            await handleCommentTrigger();
-          } else if (isBotMentionNonReview(commentBody) && github.context.payload.issue?.pull_request) {
-            await handleInteraction();
-          } else if (isBotMentionNonReview(commentBody) && !github.context.payload.issue?.pull_request) {
-            await handleIssueInteraction();
-          }
-        }
-        break;
-
-      case 'pull_request_review_comment':
-        if (action === 'created') {
-          await handleReviewCommentInteraction();
-        }
-        break;
-
-      case 'pull_request_review':
-        if (action === 'submitted' || action === 'dismissed') {
-          core.info('Review submitted/dismissed — checking if auto-approve is warranted');
-          await handleReviewStateCheck();
-        }
-        break;
-
-      default:
-        core.info(`Unhandled event: ${eventName}`);
+  // Event filtering — exit immediately for irrelevant events.
+  // Tested via integration (live PR reviews) since it depends on GitHub Actions context.
+  if (eventName === 'pull_request') {
+    if (action !== 'opened' && action !== 'synchronize') {
+      core.info(`Ignoring pull_request action: ${action}`);
+      return;
     }
-  } catch (error) {
-    if (error instanceof Error) {
-      core.setFailed(error.message);
+  } else if (eventName === 'issue_comment') {
+    if (action !== 'created') {
+      core.info(`Ignoring issue_comment action: ${action}`);
+      return;
     }
+    const body = github.context.payload.comment?.body ?? '';
+    if (!hasBotMention(body) && !isReviewRequest(body)) {
+      core.info('Comment does not mention Manki — ignoring');
+      return;
+    }
+  } else if (eventName === 'pull_request_review_comment') {
+    if (action !== 'created') {
+      core.info(`Ignoring pull_request_review_comment action: ${action}`);
+      return;
+    }
+    // Skip our own review comments
+    const commentBody = github.context.payload.comment?.body ?? '';
+    if (commentBody.includes('<!-- manki')) {
+      core.info('Ignoring our own review comment');
+      return;
+    }
+  } else if (eventName === 'pull_request_review') {
+    if (action !== 'submitted' && action !== 'dismissed') {
+      core.info(`Ignoring pull_request_review action: ${action}`);
+      return;
+    }
+  } else {
+    core.info(`Ignoring unsupported event: ${eventName}`);
+    return;
+  }
+
+  // Route to the appropriate handler
+  switch (eventName) {
+    case 'pull_request':
+      await handlePullRequest();
+      break;
+
+    case 'issue_comment': {
+      const commentBody = github.context.payload.comment?.body ?? '';
+      if (isReviewRequest(commentBody) && github.context.payload.issue?.pull_request) {
+        await handleCommentTrigger();
+      } else if (isBotMentionNonReview(commentBody) && github.context.payload.issue?.pull_request) {
+        await handleInteraction();
+      } else if (isBotMentionNonReview(commentBody) && !github.context.payload.issue?.pull_request) {
+        await handleIssueInteraction();
+      }
+      break;
+    }
+
+    case 'pull_request_review_comment':
+      await handleReviewCommentInteraction();
+      break;
+
+    case 'pull_request_review':
+      core.info('Review submitted/dismissed — checking if auto-approve is warranted');
+      await handleReviewStateCheck();
+      break;
   }
 }
 
 async function handlePullRequest(): Promise<void> {
   const pr = github.context.payload.pull_request;
   if (!pr) {
-    core.setFailed('No pull request found in event payload');
+    core.warning('No pull request found in event payload');
     return;
   }
 
@@ -506,7 +536,7 @@ async function runFullReview(
     core.info(`Severity breakdown: ${severityCounts.required} required, ${severityCounts.suggestion} suggestion, ${severityCounts.nit} nit, ${severityCounts.ignore} ignore`);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    core.setFailed(`Review failed: ${msg}`);
+    core.warning(`Review failed: ${msg}`);
 
     await updateProgressComment(octokit, owner, repo, progressCommentId, {
       phase: 'complete',
@@ -670,4 +700,24 @@ async function handleReviewCommentInteraction(): Promise<void> {
   }
 }
 
-run();
+async function main(): Promise<void> {
+  process.on('SIGTERM', () => {
+    core.info('Received SIGTERM — exiting gracefully');
+    process.exit(0);
+  });
+
+  process.on('SIGINT', () => {
+    core.info('Received SIGINT — exiting gracefully');
+    process.exit(0);
+  });
+
+  try {
+    await run();
+  } catch (error) {
+    core.warning(`Manki encountered an error: ${error}`);
+  }
+  // Always exit 0 — the merge gate is the review approval, not the check status
+  process.exit(0);
+}
+
+main();
