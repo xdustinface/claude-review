@@ -54,7 +54,7 @@ jobs:
   review:
     runs-on: ubuntu-latest
     concurrency:
-      group: manki-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+      group: manki-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
