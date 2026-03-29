@@ -1,4 +1,45 @@
-import { parseCommand, buildReplyContext, parseTriageBody, ParsedCommand, isBotComment, hasBotMention, isReviewRequest, isBotMentionNonReview } from './interaction';
+import { parseCommand, buildReplyContext, parseTriageBody, ParsedCommand, isBotComment, hasBotMention, isReviewRequest, isBotMentionNonReview, handlePRComment, handleReviewCommentReply, BOT_MARKER } from './interaction';
+import * as github from '@actions/github';
+import * as core from '@actions/core';
+import { ClaudeClient } from './claude';
+import * as memory from './memory';
+import * as ghUtils from './github';
+import * as state from './state';
+
+jest.mock('@actions/core', () => ({
+  info: jest.fn(),
+  warning: jest.fn(),
+  debug: jest.fn(),
+  getInput: jest.fn(),
+}));
+
+jest.mock('@actions/github', () => ({
+  context: {
+    payload: {},
+    repo: { owner: 'test-owner', repo: 'test-repo' },
+    actor: 'test-user',
+  },
+  getOctokit: jest.fn(() => 'mock-memory-octokit'),
+}));
+
+jest.mock('./memory', () => ({
+  writeSuppression: jest.fn().mockResolvedValue(undefined),
+  writeLearning: jest.fn().mockResolvedValue(undefined),
+  removeLearning: jest.fn().mockResolvedValue({ removed: null, remaining: 0 }),
+  removeSuppression: jest.fn().mockResolvedValue({ removed: null, remaining: 0 }),
+  batchUpdatePatternDecisions: jest.fn().mockResolvedValue(undefined),
+  sanitizeMemoryField: jest.fn((v: string) => v),
+}));
+
+jest.mock('./github', () => ({
+  reactToIssueComment: jest.fn().mockResolvedValue(undefined),
+  reactToReviewComment: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock('./state', () => ({
+  checkAndAutoApprove: jest.fn().mockResolvedValue(false),
+  fetchBotReviewThreads: jest.fn().mockResolvedValue([]),
+}));
 
 describe('parseCommand', () => {
   it('parses @manki explain with args', () => {
@@ -346,5 +387,615 @@ describe('isBotMentionNonReview', () => {
 
   it('returns false for text without bot mention', () => {
     expect(isBotMentionNonReview('just a comment')).toBe(false);
+  });
+});
+
+// --- Handler tests ---
+
+function createMockOctokit() {
+  return {
+    rest: {
+      issues: {
+        createComment: jest.fn().mockResolvedValue({ data: {} }),
+        get: jest.fn().mockResolvedValue({ data: { body: '' } }),
+        create: jest.fn().mockResolvedValue({ data: { number: 100 } }),
+        update: jest.fn().mockResolvedValue({ data: {} }),
+        removeLabel: jest.fn().mockResolvedValue({ data: {} }),
+      },
+      pulls: {
+        get: jest.fn().mockResolvedValue({ data: 'diff content' }),
+        getReviewComment: jest.fn().mockResolvedValue({ data: { body: '<!-- manki -->\nOriginal comment', path: 'src/file.ts', line: 10 } }),
+        createReplyForReviewComment: jest.fn().mockResolvedValue({ data: {} }),
+        createReview: jest.fn().mockResolvedValue({ data: { id: 1 } }),
+      },
+    },
+  } as any;
+}
+
+function createMockClient() {
+  return {
+    sendMessage: jest.fn().mockResolvedValue({ content: 'AI response here' }),
+  } as unknown as ClaudeClient;
+}
+
+function setContext(overrides: Record<string, any> = {}) {
+  const ctx = github.context as any;
+  ctx.payload = {
+    comment: {
+      id: 42,
+      body: '@manki help',
+      user: { type: 'User' },
+      author_association: 'COLLABORATOR',
+    },
+    issue: { pull_request: { url: 'https://...' } },
+    pull_request: { number: 1 },
+    ...overrides,
+  };
+  ctx.repo = { owner: 'test-owner', repo: 'test-repo' };
+  ctx.actor = 'test-user';
+}
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  setContext();
+});
+
+describe('handlePRComment', () => {
+  it('returns early when comment is missing', async () => {
+    setContext({ comment: undefined });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1);
+    expect(octokit.rest.issues.createComment).not.toHaveBeenCalled();
+  });
+
+  it('returns early for bot comments', async () => {
+    setContext({ comment: { id: 1, body: '<!-- manki -->\nbot message', user: { type: 'Bot' } } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1);
+    expect(octokit.rest.issues.createComment).not.toHaveBeenCalled();
+  });
+
+  it('returns early when no bot mention', async () => {
+    setContext({ comment: { id: 1, body: 'just a regular comment', user: { type: 'User' } } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1);
+    expect(octokit.rest.issues.createComment).not.toHaveBeenCalled();
+  });
+
+  it('rejects PR-only commands on non-PR issues', async () => {
+    setContext({
+      comment: { id: 1, body: '@manki check', user: { type: 'User' }, author_association: 'COLLABORATOR' },
+      issue: {},
+    });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1);
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('only works on pull requests') }),
+    );
+  });
+
+  it('dispatches help command', async () => {
+    setContext({ comment: { id: 42, body: '@manki help', user: { type: 'User' }, author_association: 'COLLABORATOR' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1);
+    expect(ghUtils.reactToIssueComment).toHaveBeenCalledWith(octokit, 'test-owner', 'test-repo', 42, '+1');
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining("Here's what I can do") }),
+    );
+  });
+
+  it('dispatches explain command with client', async () => {
+    setContext({ comment: { id: 42, body: '@manki explain the changes', user: { type: 'User' }, author_association: 'COLLABORATOR' } });
+    const octokit = createMockOctokit();
+    const client = createMockClient();
+    await handlePRComment(octokit, client, 'test-owner', 'test-repo', 1);
+    expect(ghUtils.reactToIssueComment).toHaveBeenCalledWith(octokit, 'test-owner', 'test-repo', 42, 'eyes');
+    expect(client.sendMessage).toHaveBeenCalled();
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('AI response here') }),
+    );
+  });
+
+  it('warns when explain command has no client', async () => {
+    setContext({ comment: { id: 42, body: '@manki explain the changes', user: { type: 'User' }, author_association: 'COLLABORATOR' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1);
+    expect(core.warning).toHaveBeenCalledWith('Claude client required for explain command');
+  });
+
+  it('dispatches dismiss command', async () => {
+    setContext({ comment: { id: 42, body: '@manki dismiss null-check', user: { type: 'User' }, author_association: 'COLLABORATOR' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1);
+    expect(ghUtils.reactToIssueComment).toHaveBeenCalledWith(octokit, 'test-owner', 'test-repo', 42, '+1');
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('Dismissed') }),
+    );
+  });
+
+  it('dispatches remember command', async () => {
+    setContext({ comment: { id: 42, body: '@manki remember always check for SQL injection in queries', user: { type: 'User' }, author_association: 'COLLABORATOR' } });
+    const octokit = createMockOctokit();
+    const memoryConfig = { enabled: true, repo: 'test-owner/memory' };
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, memoryConfig, 'mem-token');
+    expect(ghUtils.reactToIssueComment).toHaveBeenCalledWith(octokit, 'test-owner', 'test-repo', 42, 'eyes');
+    expect(memory.writeLearning).toHaveBeenCalled();
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining("I'll remember that") }),
+    );
+  });
+
+  it('dispatches forget command', async () => {
+    (memory.removeLearning as jest.Mock).mockResolvedValueOnce({ removed: { content: 'old learning' }, remaining: 2 });
+    setContext({ comment: { id: 42, body: '@manki forget old learning', user: { type: 'User' }, author_association: 'COLLABORATOR' } });
+    const octokit = createMockOctokit();
+    const memoryConfig = { enabled: true, repo: 'test-owner/memory' };
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, memoryConfig, 'mem-token');
+    expect(ghUtils.reactToIssueComment).toHaveBeenCalledWith(octokit, 'test-owner', 'test-repo', 42, 'eyes');
+    expect(memory.removeLearning).toHaveBeenCalled();
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('Removed') }),
+    );
+  });
+
+  it('dispatches check command', async () => {
+    setContext({ comment: { id: 42, body: '@manki check', user: { type: 'User' }, author_association: 'COLLABORATOR' } });
+    const octokit = createMockOctokit();
+    const config = { auto_approve: true } as any;
+    (state.checkAndAutoApprove as jest.Mock).mockResolvedValueOnce(true);
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, undefined, undefined, config);
+    expect(ghUtils.reactToIssueComment).toHaveBeenCalledWith(octokit, 'test-owner', 'test-repo', 42, 'eyes');
+    expect(state.checkAndAutoApprove).toHaveBeenCalledWith(octokit, 'test-owner', 'test-repo', 1);
+  });
+
+  it('dispatches triage command', async () => {
+    setContext({ comment: { id: 42, body: '@manki triage', user: { type: 'User' }, author_association: 'COLLABORATOR' } });
+    const octokit = createMockOctokit();
+    octokit.rest.issues.get.mockResolvedValue({ data: { body: '- [x] 💡 **Fix bug** — `src/a.ts:1`\n- [ ] 💡 **Nit** — `src/b.ts:2`' } });
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1);
+    expect(ghUtils.reactToIssueComment).toHaveBeenCalledWith(octokit, 'test-owner', 'test-repo', 42, 'eyes');
+    expect(octokit.rest.issues.create).toHaveBeenCalled();
+    expect(octokit.rest.issues.update).toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'closed' }),
+    );
+  });
+
+  it('dispatches generic question when no known command', async () => {
+    setContext({ comment: { id: 42, body: '@manki what do you think?', user: { type: 'User' }, author_association: 'COLLABORATOR' } });
+    const octokit = createMockOctokit();
+    const client = createMockClient();
+    await handlePRComment(octokit, client, 'test-owner', 'test-repo', 1);
+    expect(ghUtils.reactToIssueComment).toHaveBeenCalledWith(octokit, 'test-owner', 'test-repo', 42, 'eyes');
+    expect(client.sendMessage).toHaveBeenCalled();
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('AI response here') }),
+    );
+  });
+
+  it('warns when generic question has no client', async () => {
+    setContext({ comment: { id: 42, body: '@manki what do you think?', user: { type: 'User' }, author_association: 'COLLABORATOR' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1);
+    expect(core.warning).toHaveBeenCalledWith('Claude client required for generic questions');
+  });
+});
+
+describe('handleReviewCommentReply', () => {
+  it('returns early when comment is missing', async () => {
+    setContext({ comment: undefined });
+    const octokit = createMockOctokit();
+    const client = createMockClient();
+    await handleReviewCommentReply(octokit, client);
+    expect(octokit.rest.pulls.getReviewComment).not.toHaveBeenCalled();
+  });
+
+  it('skips bot comments', async () => {
+    setContext({ comment: { id: 1, body: '<!-- manki -->\nbot reply', user: { type: 'Bot' }, in_reply_to_id: 99 }, pull_request: { number: 1 } });
+    const octokit = createMockOctokit();
+    const client = createMockClient();
+    await handleReviewCommentReply(octokit, client);
+    expect(core.info).toHaveBeenCalledWith('Skipping bot comment');
+  });
+
+  it('skips comments that are not replies', async () => {
+    setContext({ comment: { id: 1, body: 'standalone comment', user: { type: 'User' } }, pull_request: { number: 1 } });
+    const octokit = createMockOctokit();
+    const client = createMockClient();
+    await handleReviewCommentReply(octokit, client);
+    expect(core.info).toHaveBeenCalledWith('Not a reply to an existing comment');
+  });
+
+  it('returns early when no PR number', async () => {
+    setContext({ comment: { id: 1, body: 'reply', user: { type: 'User' }, in_reply_to_id: 99 }, pull_request: undefined });
+    const octokit = createMockOctokit();
+    const client = createMockClient();
+    await handleReviewCommentReply(octokit, client);
+    expect(octokit.rest.pulls.getReviewComment).not.toHaveBeenCalled();
+  });
+
+  it('skips when parent comment is not from bot', async () => {
+    setContext({ comment: { id: 1, body: 'reply', user: { type: 'User' }, in_reply_to_id: 99 }, pull_request: { number: 1 } });
+    const octokit = createMockOctokit();
+    octokit.rest.pulls.getReviewComment.mockResolvedValue({ data: { body: 'not a bot comment', path: 'file.ts', line: 5 } });
+    const client = createMockClient();
+    await handleReviewCommentReply(octokit, client);
+    expect(core.info).toHaveBeenCalledWith('Parent comment is not from Manki');
+  });
+
+  it('posts a reply when parent is a bot comment', async () => {
+    setContext({ comment: { id: 1, body: 'Can you explain more?', user: { type: 'User' }, in_reply_to_id: 99, author_association: 'MEMBER' }, pull_request: { number: 1 } });
+    const octokit = createMockOctokit();
+    const client = createMockClient();
+    await handleReviewCommentReply(octokit, client);
+    expect(ghUtils.reactToReviewComment).toHaveBeenCalledWith(octokit, 'test-owner', 'test-repo', 1, 'eyes');
+    expect(client.sendMessage).toHaveBeenCalled();
+    expect(octokit.rest.pulls.createReplyForReviewComment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.stringContaining('AI response here'),
+        pull_number: 1,
+      }),
+    );
+    expect(core.info).toHaveBeenCalledWith('Posted reply to review comment');
+  });
+
+  it('stores learning for substantive trusted replies with memory enabled', async () => {
+    setContext({
+      comment: {
+        id: 1,
+        body: 'Actually this pattern is fine because we always validate input upstream in the middleware layer before reaching this point',
+        user: { type: 'User' },
+        in_reply_to_id: 99,
+        author_association: 'OWNER',
+      },
+      pull_request: { number: 1 },
+    });
+    const octokit = createMockOctokit();
+    const client = createMockClient();
+    const memoryConfig = { enabled: true, repo: 'test-owner/memory' };
+    await handleReviewCommentReply(octokit, client, memoryConfig, 'mem-token');
+    expect(memory.writeLearning).toHaveBeenCalled();
+    expect(core.info).toHaveBeenCalledWith('Stored user context as learning');
+  });
+
+  it('does not store learning for short replies', async () => {
+    setContext({
+      comment: { id: 1, body: 'ok', user: { type: 'User' }, in_reply_to_id: 99, author_association: 'OWNER' },
+      pull_request: { number: 1 },
+    });
+    const octokit = createMockOctokit();
+    const client = createMockClient();
+    await handleReviewCommentReply(octokit, client, { enabled: true, repo: 'test-owner/memory' }, 'mem-token');
+    expect(memory.writeLearning).not.toHaveBeenCalled();
+  });
+
+  it('does not store learning for non-trusted users', async () => {
+    setContext({
+      comment: {
+        id: 1,
+        body: 'I think this is wrong because the validation logic is actually handled differently in our codebase and the upstream check covers this',
+        user: { type: 'User' },
+        in_reply_to_id: 99,
+        author_association: 'CONTRIBUTOR',
+      },
+      pull_request: { number: 1 },
+    });
+    const octokit = createMockOctokit();
+    const client = createMockClient();
+    await handleReviewCommentReply(octokit, client, { enabled: true, repo: 'test-owner/memory' }, 'mem-token');
+    expect(memory.writeLearning).not.toHaveBeenCalled();
+  });
+
+  it('handles API errors gracefully', async () => {
+    setContext({ comment: { id: 1, body: 'reply text', user: { type: 'User' }, in_reply_to_id: 99 }, pull_request: { number: 1 } });
+    const octokit = createMockOctokit();
+    octokit.rest.pulls.getReviewComment.mockRejectedValue(new Error('API error'));
+    const client = createMockClient();
+    await handleReviewCommentReply(octokit, client);
+    expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('Failed to handle review comment reply'));
+  });
+});
+
+describe('handleDismiss (via handlePRComment)', () => {
+  it('acknowledges dismiss from non-collaborator without persisting', async () => {
+    setContext({ comment: { id: 42, body: '@manki dismiss null-check', user: { type: 'User' }, author_association: 'CONTRIBUTOR' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, { enabled: true, repo: 'mem' }, 'token');
+    expect(core.info).toHaveBeenCalledWith(expect.stringContaining('non-collaborator'));
+    expect(memory.writeSuppression).not.toHaveBeenCalled();
+  });
+
+  it('stores suppression for trusted collaborator with memory enabled', async () => {
+    setContext({ comment: { id: 42, body: '@manki dismiss null-check-warning', user: { type: 'User' }, author_association: 'OWNER' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, { enabled: true, repo: 'test-owner/memory' }, 'mem-token');
+    expect(memory.writeSuppression).toHaveBeenCalled();
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('Stored as suppression') }),
+    );
+  });
+
+  it('warns when finding reference is too short', async () => {
+    setContext({ comment: { id: 42, body: '@manki dismiss ab', user: { type: 'User' }, author_association: 'OWNER' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1);
+    expect(core.warning).toHaveBeenCalledWith('Finding reference too short to create suppression');
+  });
+
+  it('dismiss without args still posts acknowledgment', async () => {
+    setContext({ comment: { id: 42, body: '@manki dismiss', user: { type: 'User' }, author_association: 'COLLABORATOR' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1);
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('Dismissed') }),
+    );
+  });
+});
+
+describe('handleRemember (via handlePRComment)', () => {
+  it('rejects non-collaborators', async () => {
+    setContext({ comment: { id: 42, body: '@manki remember always check for sql injection in query builders', user: { type: 'User' }, author_association: 'CONTRIBUTOR' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, { enabled: true, repo: 'mem' }, 'token');
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('Only repo collaborators can teach me') }),
+    );
+  });
+
+  it('rejects too-short instructions', async () => {
+    setContext({ comment: { id: 42, body: '@manki remember hi', user: { type: 'User' }, author_association: 'OWNER' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, { enabled: true, repo: 'mem' }, 'token');
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining("too short") }),
+    );
+  });
+
+  it('reports when memory is disabled', async () => {
+    setContext({ comment: { id: 42, body: '@manki remember always check for sql injection in query builders', user: { type: 'User' }, author_association: 'OWNER' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1);
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining("Memory isn't enabled") }),
+    );
+  });
+
+  it('stores global-scoped learning with global: prefix', async () => {
+    setContext({ comment: { id: 42, body: '@manki remember global: always prefer immutable data structures in all repos', user: { type: 'User' }, author_association: 'OWNER' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, { enabled: true, repo: 'test-owner/memory' }, 'mem-token');
+    expect(memory.writeLearning).toHaveBeenCalledWith(
+      expect.anything(),
+      'test-owner/memory',
+      'test-repo',
+      expect.objectContaining({ scope: 'global' }),
+    );
+  });
+
+  it('reports error when writeLearning fails', async () => {
+    (memory.writeLearning as jest.Mock).mockRejectedValueOnce(new Error('write failed'));
+    setContext({ comment: { id: 42, body: '@manki remember always check for sql injection in query builders', user: { type: 'User' }, author_association: 'OWNER' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, { enabled: true, repo: 'mem' }, 'token');
+    expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('Failed to store learning'));
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining("Couldn't save that") }),
+    );
+  });
+});
+
+describe('handleForget (via handlePRComment)', () => {
+  it('rejects non-collaborators', async () => {
+    setContext({ comment: { id: 42, body: '@manki forget some learning', user: { type: 'User' }, author_association: 'CONTRIBUTOR' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, { enabled: true, repo: 'mem' }, 'token');
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('Only repo collaborators can manage memories') }),
+    );
+  });
+
+  it('rejects too-short search terms', async () => {
+    setContext({ comment: { id: 42, body: '@manki forget ab', user: { type: 'User' }, author_association: 'OWNER' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, { enabled: true, repo: 'mem' }, 'token');
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('Search term too short') }),
+    );
+  });
+
+  it('reports when memory is disabled', async () => {
+    setContext({ comment: { id: 42, body: '@manki forget some learning', user: { type: 'User' }, author_association: 'OWNER' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1);
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining("Memory isn't enabled") }),
+    );
+  });
+
+  it('removes a matching learning', async () => {
+    (memory.removeLearning as jest.Mock).mockResolvedValueOnce({ removed: { content: 'old learning' }, remaining: 3 });
+    setContext({ comment: { id: 42, body: '@manki forget old learning', user: { type: 'User' }, author_association: 'OWNER' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, { enabled: true, repo: 'mem' }, 'token');
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('Removed: `old learning`') }),
+    );
+  });
+
+  it('reports when no matching learning found', async () => {
+    (memory.removeLearning as jest.Mock).mockResolvedValueOnce({ removed: null, remaining: 0 });
+    setContext({ comment: { id: 42, body: '@manki forget nonexistent thing', user: { type: 'User' }, author_association: 'OWNER' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, { enabled: true, repo: 'mem' }, 'token');
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('No matching learning found') }),
+    );
+  });
+
+  it('removes a matching suppression', async () => {
+    (memory.removeSuppression as jest.Mock).mockResolvedValueOnce({ removed: { pattern: 'unused-var' }, remaining: 1 });
+    setContext({ comment: { id: 42, body: '@manki forget suppression unused-var', user: { type: 'User' }, author_association: 'OWNER' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, { enabled: true, repo: 'mem' }, 'token');
+    expect(memory.removeSuppression).toHaveBeenCalled();
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('Removed suppression: `unused-var`') }),
+    );
+  });
+
+  it('reports when no matching suppression found', async () => {
+    (memory.removeSuppression as jest.Mock).mockResolvedValueOnce({ removed: null, remaining: 0 });
+    setContext({ comment: { id: 42, body: '@manki forget suppression nonexistent', user: { type: 'User' }, author_association: 'OWNER' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, { enabled: true, repo: 'mem' }, 'token');
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('No matching suppression found') }),
+    );
+  });
+
+  it('rejects too-short suppression search term', async () => {
+    setContext({ comment: { id: 42, body: '@manki forget suppression ab', user: { type: 'User' }, author_association: 'OWNER' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, { enabled: true, repo: 'mem' }, 'token');
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('Search term too short') }),
+    );
+  });
+
+  it('handles memory error gracefully', async () => {
+    (memory.removeLearning as jest.Mock).mockRejectedValueOnce(new Error('API failure'));
+    setContext({ comment: { id: 42, body: '@manki forget some learning text', user: { type: 'User' }, author_association: 'OWNER' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, { enabled: true, repo: 'mem' }, 'token');
+    expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('Failed to remove memory'));
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining("Couldn't remove that") }),
+    );
+  });
+});
+
+describe('handleCheck (via handlePRComment)', () => {
+  it('rejects non-collaborators', async () => {
+    setContext({ comment: { id: 42, body: '@manki check', user: { type: 'User' }, author_association: 'CONTRIBUTOR' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, undefined, undefined, { auto_approve: true } as any);
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('Only repo collaborators can trigger auto-approve') }),
+    );
+  });
+
+  it('reports when auto-approve is disabled', async () => {
+    setContext({ comment: { id: 42, body: '@manki check', user: { type: 'User' }, author_association: 'OWNER' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, undefined, undefined, {} as any);
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('Auto-approve is disabled') }),
+    );
+  });
+
+  it('reports open required issues when not auto-approved', async () => {
+    setContext({ comment: { id: 42, body: '@manki check', user: { type: 'User' }, author_association: 'OWNER' } });
+    (state.checkAndAutoApprove as jest.Mock).mockResolvedValueOnce(false);
+    (state.fetchBotReviewThreads as jest.Mock).mockResolvedValueOnce([
+      { findingTitle: 'Null deref', isRequired: true, isResolved: false },
+      { findingTitle: 'Style nit', isRequired: false, isResolved: false },
+    ]);
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, undefined, undefined, { auto_approve: true } as any);
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('1 required issue(s) still open') }),
+    );
+  });
+
+  it('reports checking status when no required issues but not approved', async () => {
+    setContext({ comment: { id: 42, body: '@manki check', user: { type: 'User' }, author_association: 'OWNER' } });
+    (state.checkAndAutoApprove as jest.Mock).mockResolvedValueOnce(false);
+    (state.fetchBotReviewThreads as jest.Mock).mockResolvedValueOnce([]);
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, undefined, undefined, { auto_approve: true } as any);
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('No required issues found') }),
+    );
+  });
+
+  it('does not post comment when auto-approve succeeds', async () => {
+    setContext({ comment: { id: 42, body: '@manki check', user: { type: 'User' }, author_association: 'OWNER' } });
+    (state.checkAndAutoApprove as jest.Mock).mockResolvedValueOnce(true);
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, undefined, undefined, { auto_approve: true } as any);
+    expect(octokit.rest.issues.createComment).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleTriage (via handlePRComment)', () => {
+  it('rejects non-collaborators', async () => {
+    setContext({ comment: { id: 42, body: '@manki triage', user: { type: 'User' }, author_association: 'CONTRIBUTOR' } });
+    const octokit = createMockOctokit();
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1);
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('Only repo collaborators can triage') }),
+    );
+  });
+
+  it('reports when no findings can be parsed', async () => {
+    setContext({ comment: { id: 42, body: '@manki triage', user: { type: 'User' }, author_association: 'OWNER' } });
+    const octokit = createMockOctokit();
+    octokit.rest.issues.get.mockResolvedValue({ data: { body: 'No checkboxes here' } });
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1);
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining("Couldn't parse any findings") }),
+    );
+  });
+
+  it('creates issues for accepted findings and closes the triage issue', async () => {
+    setContext({ comment: { id: 42, body: '@manki triage', user: { type: 'User' }, author_association: 'OWNER' } });
+    const octokit = createMockOctokit();
+    octokit.rest.issues.get.mockResolvedValue({
+      data: {
+        body: '- [x] 💡 **Fix null check** — `src/a.ts:1`\n- [ ] 📝 **Rename var** — `src/b.ts:2`',
+      },
+    });
+    octokit.rest.issues.create.mockResolvedValue({ data: { number: 200 } });
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 5);
+
+    expect(octokit.rest.issues.create).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Fix null check' }),
+    );
+    expect(octokit.rest.issues.update).toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'closed', issue_number: 5 }),
+    );
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('Triage complete') }),
+    );
+  });
+
+  it('stores learnings and suppressions with memory enabled', async () => {
+    setContext({ comment: { id: 42, body: '@manki triage', user: { type: 'User' }, author_association: 'OWNER' } });
+    const octokit = createMockOctokit();
+    octokit.rest.issues.get.mockResolvedValue({
+      data: {
+        body: '- [x] 💡 **Accepted finding** — `src/a.ts:1`\n- [ ] 📝 **Rejected finding** — `src/b.ts:2`',
+      },
+    });
+    octokit.rest.issues.create.mockResolvedValue({ data: { number: 200 } });
+    const memoryConfig = { enabled: true, repo: 'test-owner/memory' };
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1, memoryConfig, 'mem-token');
+    expect(memory.writeLearning).toHaveBeenCalled();
+    expect(memory.writeSuppression).toHaveBeenCalled();
+    expect(memory.batchUpdatePatternDecisions).toHaveBeenCalled();
+  });
+
+  it('handles label removal failure gracefully', async () => {
+    setContext({ comment: { id: 42, body: '@manki triage', user: { type: 'User' }, author_association: 'OWNER' } });
+    const octokit = createMockOctokit();
+    octokit.rest.issues.get.mockResolvedValue({
+      data: { body: '- [x] 💡 **A finding** — `src/a.ts:1`' },
+    });
+    octokit.rest.issues.create.mockResolvedValue({ data: { number: 200 } });
+    octokit.rest.issues.removeLabel.mockRejectedValue(new Error('Label not found'));
+    await handlePRComment(octokit, null, 'test-owner', 'test-repo', 1);
+    // Should not throw, should still close the issue
+    expect(octokit.rest.issues.update).toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'closed' }),
+    );
   });
 });
