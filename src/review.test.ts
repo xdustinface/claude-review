@@ -11,6 +11,8 @@ import {
   rebuildRawDiff,
   findingsMatch,
   intersectFindings,
+  runReview,
+  ReviewClients,
   AGENT_POOL,
 } from './review';
 import { LinkedIssue } from './github';
@@ -838,5 +840,237 @@ describe('intersectFindings', () => {
     // threshold = ceil(3/2) = 2, finding appears in 2/3 passes
     const result = intersectFindings(passes, Math.ceil(3 / 2));
     expect(result).toHaveLength(1);
+  });
+});
+
+describe('selectTeam maintainability scoring', () => {
+  it('scores Maintainability agent higher when diff has many files', () => {
+    // Use generic filenames that do not trigger test/server/dependency scoring
+    const files: DiffFile[] = Array.from({ length: 8 }, (_, i) => ({
+      path: `src/module${i}/handler.ts`,
+      changeType: 'modified' as const,
+      hunks: [],
+    }));
+    const diff = makeDiff({ totalAdditions: 600, totalDeletions: 600, files });
+    const config = makeConfig({ review_level: 'large' });
+    const roster = selectTeam(diff, config);
+    expect(roster.agents.map(a => a.name)).toContain('Maintainability & Readability');
+  });
+
+  it('scores Performance agent higher when server files are in the diff', () => {
+    const diff = makeDiff({
+      totalAdditions: 600,
+      totalDeletions: 600,
+      files: [{ path: 'src/server/app.ts', changeType: 'modified', hunks: [] }],
+    });
+    const config = makeConfig({ review_level: 'large' });
+    const roster = selectTeam(diff, config);
+    expect(roster.agents.map(a => a.name)).toContain('Performance & Efficiency');
+  });
+});
+
+jest.mock('./judge', () => ({
+  runJudgeAgent: jest.fn(),
+  JudgeInput: {},
+}));
+
+jest.mock('./memory', () => ({
+  ...jest.requireActual('./memory'),
+  buildMemoryContext: jest.fn().mockReturnValue('memory context'),
+  applySuppressions: jest.fn().mockReturnValue({ kept: [], suppressed: [] }),
+}));
+
+describe('runReview', () => {
+  const { runJudgeAgent } = require('./judge') as { runJudgeAgent: jest.Mock };
+  const { applySuppressions } = require('./memory') as { applySuppressions: jest.Mock };
+
+  function makeClients(reviewerResponse: string = '[]'): ReviewClients {
+    return {
+      reviewer: {
+        sendMessage: jest.fn().mockResolvedValue({ content: reviewerResponse }),
+      } as unknown as import('./claude').ClaudeClient,
+      judge: {
+        sendMessage: jest.fn().mockResolvedValue({ content: '{"summary":"ok","findings":[]}' }),
+      } as unknown as import('./claude').ClaudeClient,
+    };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    runJudgeAgent.mockResolvedValue({ findings: [], summary: 'All clear.' });
+    applySuppressions.mockReturnValue({ kept: [], suppressed: [] });
+  });
+
+  it('runs a single-pass review and returns approved result with no findings', async () => {
+    const clients = makeClients();
+    const config = makeConfig();
+    const diff = makeDiff({ totalAdditions: 10, totalDeletions: 5 });
+
+    const result = await runReview(clients, config, diff, 'raw diff', 'repo context');
+    expect(result.verdict).toBe('APPROVE');
+    expect(result.reviewComplete).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  it('collects findings from reviewer agents and passes to judge', async () => {
+    const findingJson = JSON.stringify([
+      { severity: 'required', title: 'Null dereference bug', file: 'src/a.ts', line: 10, description: 'Bug found.' },
+    ]);
+    const clients = makeClients(findingJson);
+    const config = makeConfig();
+    const diff = makeDiff({ totalAdditions: 10, totalDeletions: 5 });
+
+    runJudgeAgent.mockResolvedValue({
+      findings: [
+        { severity: 'required', title: 'Null dereference bug', file: 'src/a.ts', line: 10, description: 'Bug found.', reviewers: ['Security & Safety'] },
+      ],
+      summary: 'One required finding.',
+    });
+
+    const result = await runReview(clients, config, diff, 'raw diff', 'repo context');
+    expect(result.verdict).toBe('REQUEST_CHANGES');
+    expect(result.findings).toHaveLength(1);
+    expect(runJudgeAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns COMMENT verdict when all agents fail', async () => {
+    const clients: ReviewClients = {
+      reviewer: {
+        sendMessage: jest.fn().mockRejectedValue(new Error('API error')),
+      } as unknown as import('./claude').ClaudeClient,
+      judge: {
+        sendMessage: jest.fn(),
+      } as unknown as import('./claude').ClaudeClient,
+    };
+    const config = makeConfig();
+    const diff = makeDiff({ totalAdditions: 10, totalDeletions: 5 });
+
+    const result = await runReview(clients, config, diff, 'raw diff', 'repo context');
+    expect(result.verdict).toBe('COMMENT');
+    expect(result.reviewComplete).toBe(false);
+    expect(result.summary).toContain('all reviewer agents failed');
+  });
+
+  it('fires onProgress callback after review phase', async () => {
+    const clients = makeClients();
+    const config = makeConfig();
+    const diff = makeDiff({ totalAdditions: 10, totalDeletions: 5 });
+    const onProgress = jest.fn();
+
+    await runReview(clients, config, diff, 'raw diff', 'repo context', undefined, undefined, undefined, undefined, onProgress);
+    expect(onProgress).toHaveBeenCalledWith({ phase: 'reviewed', rawFindingCount: 0 });
+  });
+
+  it('applies suppressions from memory before judge', async () => {
+    const findingJson = JSON.stringify([
+      { severity: 'suggestion', title: 'Suppressed finding here', file: 'src/a.ts', line: 10, description: 'Desc.' },
+    ]);
+    const clients = makeClients(findingJson);
+    const config = makeConfig();
+    const diff = makeDiff({ totalAdditions: 10, totalDeletions: 5 });
+    const memory = {
+      suppressions: [{ id: '1', pattern: 'suppressed', reason: 'intentional', created_by: 'user', created_at: '2025-01-01', pr_ref: '#1' }],
+      learnings: [],
+      patterns: [],
+    };
+
+    applySuppressions.mockReturnValue({
+      kept: [],
+      suppressed: [{ severity: 'suggestion', title: 'Suppressed finding here', file: 'src/a.ts', line: 10, description: 'Desc.', reviewers: ['Security & Safety'] }],
+    });
+
+    const result = await runReview(clients, config, diff, 'raw diff', 'repo context', memory);
+    expect(applySuppressions).toHaveBeenCalled();
+    expect(result.findings).toEqual([]);
+  });
+
+  it('falls back to reviewer findings when judge fails', async () => {
+    const findingJson = JSON.stringify([
+      { severity: 'suggestion', title: 'Some code improvement', file: 'src/a.ts', line: 10, description: 'Improve this.' },
+    ]);
+    const clients = makeClients(findingJson);
+    const config = makeConfig();
+    const diff = makeDiff({ totalAdditions: 10, totalDeletions: 5 });
+
+    runJudgeAgent.mockRejectedValue(new Error('Judge API failed'));
+
+    const result = await runReview(clients, config, diff, 'raw diff', 'repo context');
+    expect(result.findings.length).toBeGreaterThanOrEqual(1);
+    expect(result.verdict).toBe('APPROVE');
+  });
+
+  it('runs multi-pass review with review_passes > 1', async () => {
+    const findingJson = JSON.stringify([
+      { severity: 'required', title: 'Consistent bug across passes', file: 'src/a.ts', line: 10, description: 'Bug.' },
+    ]);
+    const clients = makeClients(findingJson);
+    const config = makeConfig({ review_passes: 2 });
+    const diff = makeDiff({ totalAdditions: 10, totalDeletions: 5 });
+
+    runJudgeAgent.mockResolvedValue({
+      findings: [
+        { severity: 'required', title: 'Consistent bug across passes', file: 'src/a.ts', line: 10, description: 'Bug.', reviewers: ['Security & Safety'] },
+      ],
+      summary: 'One finding.',
+    });
+
+    const result = await runReview(clients, config, diff, 'raw diff', 'repo context');
+    expect(result.reviewComplete).toBe(true);
+    // Each agent runs 2 passes, so reviewer sendMessage should be called more than once per agent
+    expect((clients.reviewer.sendMessage as jest.Mock).mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('filters out ignored findings from judge result', async () => {
+    const findingJson = JSON.stringify([
+      { severity: 'suggestion', title: 'Real finding issue here', file: 'src/a.ts', line: 10, description: 'Desc.' },
+    ]);
+    const clients = makeClients(findingJson);
+    const config = makeConfig();
+    const diff = makeDiff({ totalAdditions: 10, totalDeletions: 5 });
+
+    runJudgeAgent.mockResolvedValue({
+      findings: [
+        { severity: 'ignore', title: 'Real finding issue here', file: 'src/a.ts', line: 10, description: 'Desc.', reviewers: ['Security & Safety'] },
+      ],
+      summary: 'All ignored.',
+    });
+
+    const result = await runReview(clients, config, diff, 'raw diff', 'repo context');
+    expect(result.findings).toHaveLength(0);
+    expect(result.verdict).toBe('APPROVE');
+    expect(result.allJudgedFindings).toHaveLength(1);
+  });
+
+  it('includes agent names in result', async () => {
+    const clients = makeClients();
+    const config = makeConfig();
+    const diff = makeDiff({ totalAdditions: 10, totalDeletions: 5 });
+
+    const result = await runReview(clients, config, diff, 'raw diff', 'repo context');
+    expect(result.agentNames).toBeDefined();
+    expect(result.agentNames!.length).toBeGreaterThan(0);
+    expect(result.agentNames).toContain('Security & Safety');
+  });
+
+  it('handles partial agent failures in single-pass mode', async () => {
+    let callCount = 0;
+    const clients: ReviewClients = {
+      reviewer: {
+        sendMessage: jest.fn().mockImplementation(() => {
+          callCount++;
+          if (callCount === 1) return Promise.reject(new Error('Agent 1 failed'));
+          return Promise.resolve({ content: '[]' });
+        }),
+      } as unknown as import('./claude').ClaudeClient,
+      judge: {
+        sendMessage: jest.fn(),
+      } as unknown as import('./claude').ClaudeClient,
+    };
+    const config = makeConfig();
+    const diff = makeDiff({ totalAdditions: 10, totalDeletions: 5 });
+
+    const result = await runReview(clients, config, diff, 'raw diff', 'repo context');
+    expect(result.reviewComplete).toBe(true);
+    expect(result.verdict).toBe('APPROVE');
   });
 });
