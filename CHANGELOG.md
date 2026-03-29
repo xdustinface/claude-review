@@ -5,45 +5,6 @@ All notable changes to Manki will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Added
-
-- Live-updating dashboard progress comment during reviews
-- Review event body with summary and collapsed stats
-- AI-generated review summary with text dashboard
-- Auto-detect GitHub App installation and use app token
-- `/manki` and `@manki-labs` command prefixes
-- Token service authentication with GitHub Actions OIDC
-- Judge validates PR scope and flags unrelated file changes
-- Action always exits 0; event filtering moved inside
-
-### Changed
-
-- Redesigned nit issue formatting with collapsible details and GitHub permalinks
-- Progress comment refactored into frozen audit log with review metadata
-- Clean inline finding comments with structured AI context
-- Restyled all command responses with Manki branding
-- Silent auto-approve with no visible message body
-- Triage-created issues use minimal format
-- Default `models.reviewer` to Sonnet, `models.judge` to Opus
-- Bumped `max_diff_lines` from 10k to 50k
-- README overhaul with logo and updated features
-- Removed blockquote from review summary
-- Added codecov.yml informational config
-
-### Fixed
-
-- Removed `DEFAULT_REVIEWERS` — `AGENT_POOL` is single source of truth
-- Team size label shows actual agent count
-- Code fences in nit issues render at column 0
-- Post-judge dedup pass for duplicate findings
-- Loosened judge required severity bar and added memory
-- Serialized concurrent `ensureCLI` calls
-- Triage parser matches new details format
-- `isReviewRequest` and `hasBotMention` support all prefixes
-- Token service used for installation lookup
-
 ## [3.1.0] - 2026-03-25
 
 ### Added
@@ -169,7 +130,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic review posting with inline comments
 - Configuration via `.manki.yml`
 
-[Unreleased]: https://github.com/xdustinface/manki/compare/v3.1.0...HEAD
 [3.1.0]: https://github.com/xdustinface/manki/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/xdustinface/manki/compare/v2.4.0...v3.0.0
 [2.4.0]: https://github.com/xdustinface/manki/compare/v2.3.0...v2.4.0
